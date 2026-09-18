@@ -1,0 +1,33 @@
+# Connect to an existing Ollama server; does not start or download Ollama.
+services:
+  ai-trader:
+    build: .
+    init: true
+    command: ["ollama-start"]
+    environment:
+      TRADING_MODE: PAPER
+      ENABLE_LIVE_TRADING: "false"
+      DATABASE_URL: sqlite:////data/paper.db
+      AI_PROVIDER: ollama
+      AI_MODEL: ${OLLAMA_MODEL:-qwen3.8:27b}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in config/ollama.env}
+      OLLAMA_TIMEOUT_SECONDS: ${OLLAMA_TIMEOUT_SECONDS:-120}
+      PAPER_CYCLES: ${PAPER_CYCLES:-0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - paper-data:/data
+      - ./config/default.toml:/app/config/default.toml:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 150s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,7 +1,9 @@
 """Local, read-only dashboard. Reads SQLite without migrations or trading imports."""
 
 import json
+import shutil
 import sqlite3
+import tempfile
 from contextlib import closing
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -263,6 +265,25 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if url.path in assets:
                 name, mime = assets[url.path]
                 self.send(200, (WEB / name).read_bytes(), mime)
+                return
+            if url.path == "/api/export":
+                from trader.export_results import write_export
+
+                with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as output:
+                    write_export(self.root, output)
+                    size = output.tell()
+                    output.seek(0)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/zip")
+                    self.send_header("Content-Length", str(size))
+                    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+                    self.send_header(
+                        "Content-Disposition", f'attachment; filename="paper-analysis-{stamp}.zip"'
+                    )
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.end_headers()
+                    shutil.copyfileobj(output, self.wfile)
                 return
             if url.path == "/api/summary":
                 result = summary(self.root)

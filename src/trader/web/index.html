@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Crypto Lab｜模擬交易觀測站</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
 <body><div class="shell"><header><a class="brand" href="/" aria-label="Crypto Lab 首頁"><span class="logo">◈</span><span>CRYPTO<span class="brand-light"> LAB</span></span></a><span class="mode"><span class="dot"></span>PAPER · 模擬交易</span><span class="local">本機觀測站 / v2</span></header>
-<main><section class="intro"><div><p class="eyebrow">OBSERVE. COMPARE. LEARN.</p><h1>讓每一次決策，都看得見。</h1><p class="muted">BTC 與 ETH 的策略實驗。觀察數據，理解結果。</p></div><button id="refresh" class="refresh">↻ 立即更新</button></section>
+<main><section class="intro"><div><p class="eyebrow">OBSERVE. COMPARE. LEARN.</p><h1>讓每一次決策，都看得見。</h1><p class="muted">BTC 與 ETH 的策略實驗。觀察數據，理解結果。</p></div><div class="intro-actions"><a class="refresh" href="/api/export" download>↓ 匯出分析資料</a><button id="refresh" class="refresh">↻ 立即更新</button></div></section>
 <div id="alert" class="alert" role="status" hidden></div>
 <section class="health" aria-label="資料狀態"><div><span id="health-dot" class="dot"></span><strong id="health">讀取資料中</strong></div><span id="updated">—</span><span id="samples">—</span><span id="errors">—</span><span class="auto">每 30 秒自動更新</span></section>
 <section id="cards" class="cards" aria-label="策略比較"><p class="muted">正在載入比較帳本…</p></section>

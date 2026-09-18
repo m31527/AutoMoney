@@ -1,6 +1,7 @@
 """Independent Ollama PAPER worker; comparisons and global kill switch stay intact."""
 
 import fcntl
+import json
 import sqlite3
 import time
 from collections.abc import Callable
@@ -42,8 +43,15 @@ def open_account(config: AppConfig, provider: OllamaProvider) -> sqlite3.Connect
         )
         with transaction(connection):
             old = connection.execute("SELECT definition FROM local_ai_config WHERE id=1").fetchone()
-            if old and old[0] != definition:
-                raise ValueError("Model/risk settings changed; use a new experiment directory")
+            if old:
+                previous, current = json.loads(old[0]), json.loads(definition)
+                previous.pop("base_url", None)
+                current.pop("base_url", None)
+                if previous != current:
+                    raise ValueError("Model/risk settings changed; use a new experiment directory")
+                connection.execute(
+                    "UPDATE local_ai_config SET definition=? WHERE id=1", (definition,)
+                )
             connection.execute("INSERT OR IGNORE INTO local_ai_config VALUES (1,?)", (definition,))
         return connection
     except BaseException:
