@@ -38,7 +38,7 @@ services:
       TRADING_MODE: PAPER
       DATABASE_URL: sqlite:////data/paper.db
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     volumes:
       - paper-data:/data:ro
     read_only: true
