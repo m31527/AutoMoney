@@ -60,8 +60,8 @@ class RiskConfig:
                 raise ConfigError(f"{name} must remain false")
         if not isinstance(self.symbols, (tuple, list)) or not self.symbols:
             raise ConfigError("symbols must be a nonempty list")
-        if any(s not in ("BTCUSDT", "ETHUSDT") for s in self.symbols):
-            raise ConfigError("Only BTCUSDT and ETHUSDT are supported")
+        if any(s not in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT") for s in self.symbols):
+            raise ConfigError("Only BTCUSDT, ETHUSDT, SOLUSDT and XRPUSDT are supported")
         if len(set(self.symbols)) != len(self.symbols):
             raise ConfigError("symbols must not contain duplicates")
         object.__setattr__(self, "symbols", tuple(self.symbols))

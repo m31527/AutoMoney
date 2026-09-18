@@ -70,7 +70,9 @@ class BinanceSpotAdapter:
     ) -> None:
         if mode not in (TradingMode.PAPER, TradingMode.TESTNET):
             raise TradingDisabled()
-        if not symbols or any(s not in ("BTCUSDT", "ETHUSDT") for s in symbols):
+        if not symbols or any(
+            s not in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT") for s in symbols
+        ):
             raise ValueError("Unsupported symbol whitelist")
         if mode == TradingMode.PAPER and credentials is not None:
             raise ValueError("PAPER public market data must not receive credentials")

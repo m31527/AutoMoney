@@ -1,0 +1,10 @@
+services:
+  trader:
+    volumes:
+      - ./config/altcoins.toml:/app/config/default.toml:ro
+  ai-trader:
+    volumes:
+      - ./config/altcoins.toml:/app/config/default.toml:ro
+  dashboard:
+    ports: !override
+      - "${ALT_DASHBOARD_BIND:-127.0.0.1}:8082:8080"

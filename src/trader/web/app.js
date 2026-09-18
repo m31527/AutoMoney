@@ -13,7 +13,7 @@ const element = (tag,text,cls) => {const node=document.createElement(tag); if(te
 let page=1, pages=1, sequence=0;
 async function api(path){const response=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(10000)});if(!response.ok)throw new Error('讀取失敗');return response.json();}
 function alertMessage(message){$('alert').textContent=message;$('alert').hidden=!message;}
-function cards(data){$('cards').replaceChildren();for(const [key,label] of Object.entries(labels)){const p=data.portfolios[key];const card=element('article',undefined,'card '+({sma5m:'sma',trend1h:'trend',hold:'hold',cash:'cash'}[key]));const top=element('div',undefined,'card-top');top.append(element('span',label),element('span',key==='hold'||key==='cash'?'基準':'策略','tag'));card.append(top,element('div',money(p.equity),'value'),element('p',signed(p.net_pnl)+'  /  '+percent(p.return_pct),'pnl '+(Number(p.net_pnl)>0?'positive':Number(p.net_pnl)<0?'negative':'neutral')));const bottom=element('div',undefined,'card-bottom');bottom.append(element('span','最大回落 '+num(p.drawdown_pct)+'%'),element('span','費用 '+money(p.fees)));card.append(bottom);card.append(element('p',p.stats?'成交 '+p.stats.fills+' 次 · 拒絕 '+p.stats.rejected+' 次':key==='hold'?'BTC 15% · ETH 15% · 現金 70%':'保持現金，沒有交易成本','card-detail'));$('cards').append(card);}}
+function cards(data){$('cards').replaceChildren();for(const [key,label] of Object.entries(labels)){const p=data.portfolios[key];const card=element('article',undefined,'card '+({sma5m:'sma',trend1h:'trend',hold:'hold',cash:'cash'}[key]));const top=element('div',undefined,'card-top');top.append(element('span',label),element('span',key==='hold'||key==='cash'?'基準':'策略','tag'));card.append(top,element('div',money(p.equity),'value'),element('p',signed(p.net_pnl)+'  /  '+percent(p.return_pct),'pnl '+(Number(p.net_pnl)>0?'positive':Number(p.net_pnl)<0?'negative':'neutral')));const bottom=element('div',undefined,'card-bottom');bottom.append(element('span','最大回落 '+num(p.drawdown_pct)+'%'),element('span','費用 '+money(p.fees)));card.append(bottom);card.append(element('p',p.stats?'成交 '+p.stats.fills+' 次 · 拒絕 '+p.stats.rejected+' 次':key==='hold'?data.risk.symbols.map(s=>s.replace('USDT','')+' 15%').join(' · ')+' · 現金 70%':'保持現金，沒有交易成本','card-detail'));$('cards').append(card);}}
 function chart(points){const ns='http://www.w3.org/2000/svg';const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 1100 260');svg.setAttribute('role','img');svg.setAttribute('aria-label','各策略美元損益曲線，完整數值請見上方策略卡片');function node(tag,attrs,text){const n=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))n.setAttribute(k,String(v));if(text)n.textContent=text;svg.append(n);return n;}
 const values=points.flatMap(p=>Object.values(p.values).map(Number));let lo=Math.min(0,...values),hi=Math.max(0,...values);const pad=Math.max(.1,(hi-lo)*.15);lo-=pad;hi+=pad;const y=v=>220-(v-lo)/(hi-lo)*200;const times=points.map(p=>new Date(p.timestamp).getTime());const start=times[0],span=Math.max(1,times.at(-1)-start);const x=t=>70+(t-start)/span*1010;
 for(let i=0;i<=4;i++){const value=lo+(hi-lo)*i/4;node('line',{x1:70,x2:1080,y1:y(value),y2:y(value),stroke:'#25343b','stroke-dasharray':'3 5'});node('text',{x:58,y:y(value)+4,fill:'#94a7ad','font-size':11,'text-anchor':'end'},(value<0?'−':'')+'$'+num(Math.abs(value)));}
@@ -36,7 +36,7 @@ function changed(key, data, render) {
 }
 function renderMarkets(data){
   $('market-prices').replaceChildren();
-  for(const symbol of ['BTCUSDT','ETHUSDT']){
+  for(const symbol of data.symbols||Object.keys(data.markets||{})){
     const quote=data.markets?.[symbol];
     $('market-prices').append(element('p',symbol+' · '+(quote?money(quote.price)+' USDT · '+date(quote.timestamp):'等待下一輪行情')));
   }
@@ -57,7 +57,7 @@ async function sync(){
   alertMessage('');
   if(results[0].status==='fulfilled'){
     const data=results[0].value;
-    changed('markets',{markets:data.markets,holdings:data.holdings},renderMarkets);
+    changed('markets',{markets:data.markets,holdings:data.holdings,symbols:data.risk?.symbols},renderMarkets);
     // Exclude the ticking age from the content fingerprint, but preserve stale transitions.
     const stable={...data,age_seconds:data.age_seconds>900?901:0};
     changed('summary',stable,renderSummary);

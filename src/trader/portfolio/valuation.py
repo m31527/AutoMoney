@@ -54,7 +54,7 @@ def value_portfolio(account: Account, tickers: tuple[Ticker, ...]) -> Valuation:
             free_cash, cash = balance.free, total
         elif total:
             symbol = balance.asset + "USDT"
-            if symbol not in ("BTCUSDT", "ETHUSDT") or symbol not in prices:
+            if symbol not in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT") or symbol not in prices:
                 raise ValueError("Cannot value a nonzero holding")
             positions.append(ValuedPosition(symbol, balance.free, total, prices[symbol]))
     result = Valuation(cash, free_cash, tuple(positions))

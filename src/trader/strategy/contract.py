@@ -20,7 +20,7 @@ PROPOSAL_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "required": list(FIELDS),
     "properties": {
-        "symbol": {"type": "string", "enum": ["BTCUSDT", "ETHUSDT"]},
+        "symbol": {"type": "string", "enum": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]},
         "action": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "requested_notional_usd": {"type": "number", "minimum": 0},
@@ -55,7 +55,7 @@ def parse_proposal(raw: str, symbol: str) -> TradeProposal:
         )
         if not isinstance(data, dict) or set(data) != set(FIELDS):
             raise InvalidProposal()
-        if data["symbol"] != symbol or symbol not in ("BTCUSDT", "ETHUSDT"):
+        if data["symbol"] != symbol or symbol not in ("BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"):
             raise InvalidProposal()
         action = Action(data["action"])
         confidence, amount = data["confidence"], data["requested_notional_usd"]

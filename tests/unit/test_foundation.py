@@ -51,7 +51,7 @@ class ConfigurationTests(unittest.TestCase):
             {"min_minutes_between_trades": -1},
             {"minimum_confidence": 1.01},
             {"max_symbol_allocation_pct": 101},
-            {"symbols": ["SOLUSDT"]},
+            {"symbols": ["UNSUPPORTEDUSDT"]},
             {"symbols": []},
             {"symbols": ["BTCUSDT", "BTCUSDT"]},
             {"symbols": "BTCUSDT"},

@@ -12,7 +12,8 @@ from trader.strategy.baseline import HoldStrategy, SMAStrategy, StrategyAudit, S
 from trader.strategy.contract import InvalidProposal, parse_proposal
 from trader.strategy.provider import AIProvider, ProviderError
 
-INSTRUCTIONS = """Propose a BTC/ETH SPOT trade using only the supplied observations.
+INSTRUCTIONS = """Propose a SPOT trade for the supplied snapshot symbol.
+Use only the supplied observations.
 Return ONLY the required JSON object. HOLD is valid and often preferable.
 Never invent balances, prices or indicators. Do not decide final order quantity.
 Do not modify risk parameters or request leverage, margin, futures, shorting or withdrawals.

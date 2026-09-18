@@ -33,7 +33,7 @@ ARMS: dict[str, tuple[Strategy, str, int]] = {
 LABELS = {
     "sma5m": "5 分鐘 SMA",
     "trend1h": "1 小時趨勢",
-    "hold": "持有 BTC/ETH 各 15%",
+    "hold": "持有配置幣種各 15%",
     "cash": "全現金",
 }
 REASONS = {
@@ -50,8 +50,8 @@ REASONS = {
 
 class Experiment:
     def __init__(self, config: AppConfig, switch: KillSwitch) -> None:
-        if config.mode != TradingMode.PAPER or set(config.risk.symbols) != {"BTCUSDT", "ETHUSDT"}:
-            raise ValueError("Comparison requires PAPER with BTC and ETH")
+        if config.mode != TradingMode.PAPER or len(config.risk.symbols) != 2:
+            raise ValueError("Comparison requires PAPER with exactly two configured symbols")
         self.config, self.switch = config, switch
         self.root = config.database_path.parent / "experiment-v2"
         self.root.mkdir(parents=True, exist_ok=True)
@@ -303,7 +303,7 @@ class Experiment:
         age = max(0, int((now - stamp).total_seconds()))
         lines = [
             "Crypto 模擬比較報告 v2（非真實交易／未啟用 AI）",
-            "每組獨立模擬本金：$" + str(capital) + "；BTC/ETH 共用各組風控上限",
+            "每組獨立模擬本金：$" + str(capital) + "；配置幣種共用各組風控上限",
             "開始："
             + datetime.fromisoformat(inception)
             .astimezone(ZoneInfo("Asia/Taipei"))
@@ -351,7 +351,7 @@ class Experiment:
             lines.append(f"  相對持有基準：${delta:+.2f}")
         lines.extend(
             [
-                "持有基準為理論組合：70% 現金、BTC/ETH 各投入 15%，含入場費用與滑價、不再平衡。",
+                "持有基準為理論組合：70% 現金、兩種配置幣各投入 15%，含入場費用與滑價、不再平衡。",
                 "損益含已付費用；未扣尚未賣出的退出費用。最大回落依五分鐘觀測計算。",
                 "1 小時組同時改變週期與進出場規則，並非只比較週期。MA 差距不是收益預測。",
                 "資料不足以判斷穩定獲利；舊版帳本保留且未混入比較。",
