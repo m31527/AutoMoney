@@ -28,5 +28,53 @@ function renderSummary(data){renderAI(data.ai);if(!data.ready){$('health').textC
 const stale=data.age_seconds>900;$('health').textContent=data.killed?'交易已暫停':stale?'資料更新延遲':data.killed===null?'控制狀態未知':'近期資料已更新';$('health-dot').classList.toggle('stale',stale||data.killed!==false);$('updated').textContent='最後觀測 '+date(data.updated_at);$('samples').textContent=data.samples+' 輪觀測';$('errors').textContent='行情錯誤 '+data.error_count+' 次';$('started').textContent='開始 '+date(data.started_at);$('capital').textContent=Number(data.capital).toLocaleString('en-US');cards(data);chart(data.points);if(stale)alertMessage('超過 15 分鐘沒有新觀測。請檢查 Docker、網路或電腦是否進入睡眠；下方仍是最後保存的資料。');}
 function renderRecords(data){pages=data.pages;$('records').replaceChildren();$('record-count').textContent=data.total+' 筆';$('page-info').textContent='第 '+page+' / '+pages+' 頁 · 每頁 30 筆';$('prev').disabled=page<=1;$('next').disabled=page>=pages;if(!data.rows.length){const row=element('tr');const cell=element('td','目前沒有符合條件的紀錄。','empty');cell.colSpan=5;row.append(cell);$('records').append(row);return;}
 for(const r of data.rows){const tr=element('tr');tr.append(element('td',date(r.timestamp)),element('td',r.symbol||'—'),element('td',({BUY:'買入',SELL:'賣出',HOLD:'觀望'})[r.action]||'—'));const state=element('td');state.append(element('span',statusLabels[r.status]||r.status,'badge '+r.status));tr.append(state);let text=r.reason?(reasonLabels[r.reason]||r.reason):r.status==='HOLD'?'未提出買賣，等待下一次策略評估':(r.reasons||[]).map(x=>reasonLabels[x]||x).join('、');if(r.order)text='成交 '+num(r.order.executed_qty,8)+' · 價格 '+money(r.order.average_fill_price)+' · 費用 '+money(r.order.fee);const detail=element('td',text);if(r.model_reason)detail.append(element('div','模型／系統說明：'+(reasonLabels[r.model_reason]||r.model_reason),'detail'));if(r.model)detail.append(element('div',r.model,'detail'));if(r.status==='REJECTED'&&r.signal!=null&&r.cost!=null)detail.append(element('div','訊號代理值 '+num(r.signal)+' bps / 來回成本 '+num(r.cost)+' bps','detail'));tr.append(detail);$('records').append(tr);}}
-async function refresh(){const seq=++sequence;$('refresh').disabled=true;const source=$('source').value,status=$('status').value;const results=await Promise.allSettled([api('/api/summary'),api('/api/records?'+new URLSearchParams({source,status,page:String(page)}))]);if(seq!==sequence)return;alertMessage('');if(results[0].status==='fulfilled')renderSummary(results[0].value);else{$('health').textContent='無法連線';$('health-dot').classList.add('stale');alertMessage('暫時無法取得帳本資料。顯示內容可能已過期，請確認 Docker 正在運行後再按「立即更新」。');}if(results[1].status==='fulfilled')renderRecords(results[1].value);else{$('records').replaceChildren();$('record-count').textContent='讀取失敗';$('page-info').textContent='紀錄暫時無法讀取';$('prev').disabled=true;$('next').disabled=true;alertMessage('紀錄讀取失敗，請稍後再試。');}$('refresh').disabled=false;}
-$('source').addEventListener('change',()=>{page=1;const events=['errors','events','ai-events','ai-calls'].includes($('source').value);$('status').disabled=events;if(events)$('status').value='ALL';$('record-hint').textContent=events?'顯示已保存的應用程式事件；不包含 Docker 啟停日誌':'每根收盤 K 線的決策都會保留';refresh();});$('status').addEventListener('change',()=>{page=1;refresh();});$('prev').addEventListener('click',()=>{if(page>1){page--;refresh();}});$('next').addEventListener('click',()=>{if(page<pages){page++;refresh();}});$('refresh').addEventListener('click',refresh);refresh();setInterval(()=>{if(!document.hidden)refresh();},30000);
+
+const rendered = new Map();
+function changed(key, data, render) {
+  const fingerprint=JSON.stringify(data);
+  if(rendered.get(key)!==fingerprint){render(data);rendered.set(key,fingerprint);}
+}
+function renderMarkets(data){
+  $('market-prices').replaceChildren();
+  for(const symbol of ['BTCUSDT','ETHUSDT']){
+    const quote=data.markets?.[symbol];
+    $('market-prices').append(element('p',symbol+' · '+(quote?money(quote.price)+' USDT · '+date(quote.timestamp):'等待下一輪行情')));
+  }
+  $('holdings').replaceChildren();
+  for(const account of data.holdings||[]){
+    const box=element('div',undefined,'holding-account');
+    box.append(element('h3',labels[account.strategy]||'Ollama AI'),element('p','現金 '+money(account.cash)+' · 持倉市值 '+money(Number(account.equity)-Number(account.cash))+' · 估值 '+date(account.timestamp),'muted'));
+    if(!account.positions.length)box.append(element('p','尚未持有幣，資金為現金。','muted'));
+    for(const p of account.positions)box.append(element('p',p.symbol+' · 數量 '+num(p.quantity,8)+' · 估值價格 '+money(p.market_price)+' · 市值 '+money(p.market_value)));
+    $('holdings').append(box);
+  }
+}
+async function sync(){
+  const seq=++sequence;
+  const source=$('source').value,status=$('status').value;
+  const results=await Promise.allSettled([api('/api/summary'),api('/api/records?'+new URLSearchParams({source,status,page:String(page)}))]);
+  if(seq!==sequence)return;
+  alertMessage('');
+  if(results[0].status==='fulfilled'){
+    const data=results[0].value;
+    changed('markets',{markets:data.markets,holdings:data.holdings},renderMarkets);
+    // Exclude the ticking age from the content fingerprint, but preserve stale transitions.
+    const stable={...data,age_seconds:data.age_seconds>900?901:0};
+    changed('summary',stable,renderSummary);
+    if(data.age_seconds>900)alertMessage('超過 15 分鐘沒有新觀測；目前顯示最後保存的資料。');
+  }else{
+    rendered.delete('summary');
+    $('health').textContent='連線中斷，正在自動重試';
+    $('health-dot').classList.add('stale');
+    alertMessage('暫時無法取得資料，保留最後內容並自動重試。');
+  }
+  if(results[1].status==='fulfilled')changed('records',results[1].value,renderRecords);
+  else alertMessage('紀錄暫時無法讀取，保留最後內容並自動重試。');
+}
+$('source').addEventListener('change',()=>{page=1;rendered.delete('records');const events=['errors','events','ai-events','ai-calls'].includes($('source').value);$('status').disabled=events;if(events)$('status').value='ALL';sync();});
+$('status').addEventListener('change',()=>{page=1;rendered.delete('records');sync();});
+$('prev').addEventListener('click',()=>{if(page>1){page--;sync();}});
+$('next').addEventListener('click',()=>{if(page<pages){page++;sync();}});
+async function monitor(){if(!document.hidden)await sync();setTimeout(monitor,5000);}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync();});
+monitor();

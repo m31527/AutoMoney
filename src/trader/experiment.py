@@ -222,6 +222,13 @@ class Experiment:
                 "timestamp": json_default(now),
                 "portfolios": portfolios,
                 "outcomes": outcomes,
+                "markets": {
+                    s: {
+                        "price": str(m.ticker.last_price),
+                        "timestamp": json_default(m.ticker.timestamp),
+                    }
+                    for s, m in markets.items()
+                },
             }
             self.db.execute(
                 "INSERT INTO experiment_samples VALUES (?,?,?)",

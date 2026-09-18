@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -122,3 +123,14 @@ class DashboardTests(unittest.TestCase):
             handler.path = path
             handler.do_GET()
             self.assertEqual(handler.send.call_args.args[0], expected)
+
+    def test_market_prices_and_holdings_use_saved_valuations(self):
+        self.exp.sample(observations(), averages(), NOW)
+        data = summary(self.root)
+        self.assertEqual(data["markets"]["BTCUSDT"]["price"], "50000")
+        accounts = {p["strategy"]: p for p in data["holdings"]}
+        self.assertEqual(set(accounts), {"sma5m", "trend1h"})
+        for account in accounts.values():
+            total = sum((Decimal(p["market_value"]) for p in account["positions"]), Decimal(0))
+            self.assertEqual(total + Decimal(account["cash"]), Decimal(account["equity"]))
+            self.assertTrue(account["timestamp"])

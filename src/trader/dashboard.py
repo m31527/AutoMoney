@@ -67,11 +67,40 @@ def ai_summary(root: Path) -> dict[str, Any]:
         }
 
 
+def holdings(root: Path) -> list[dict[str, Any]]:
+    result = []
+    for name in ("sma5m", "trend1h", "ollama"):
+        path = root / SOURCES[name]
+        if not path.exists():
+            continue
+        with closing(reader(path)) as db:
+            row = db.execute(
+                "SELECT * FROM portfolio_snapshots ORDER BY timestamp DESC,id DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            continue
+        positions = json.loads(row["positions_json"])
+        for position in positions:
+            position["market_value"] = str(
+                Decimal(position["quantity"]) * Decimal(position["market_price"])
+            )
+        result.append(
+            {
+                "strategy": name,
+                "timestamp": row["timestamp"],
+                "cash": row["cash"],
+                "equity": row["equity"],
+                "positions": positions,
+            }
+        )
+    return result
+
+
 def summary(root: Path) -> dict[str, Any]:
     ai = ai_summary(root)
     path = root / "experiment-v2/comparison.db"
     if not path.exists():
-        return {"ready": False, "ai": ai}
+        return {"ready": False, "ai": ai, "holdings": holdings(root), "markets": {}}
     with closing(reader(path)) as db:
         db.execute("BEGIN")
         meta = {r[0]: json.loads(r[1]) for r in db.execute("SELECT key,value FROM experiment_meta")}
@@ -85,7 +114,13 @@ def summary(root: Path) -> dict[str, Any]:
             "SELECT timestamp,code FROM experiment_errors ORDER BY id DESC LIMIT 1"
         ).fetchone()
     if not rows:
-        return {"ready": False, "error_count": error_count, "ai": ai}
+        return {
+            "ready": False,
+            "error_count": error_count,
+            "ai": ai,
+            "holdings": holdings(root),
+            "markets": {},
+        }
     arms = ("sma5m", "trend1h", "hold", "cash")
     peaks = dict.fromkeys(arms, capital)
     drawdowns = dict.fromkeys(arms, Decimal(0))
@@ -123,6 +158,8 @@ def summary(root: Path) -> dict[str, Any]:
     stamp = datetime.fromisoformat(rows[-1][0])
     return {
         "ready": True,
+        "markets": latest.get("markets", {}),
+        "holdings": holdings(root),
         "ai": ai,
         "capital": str(capital),
         "started_at": meta["baseline"]["timestamp"],
