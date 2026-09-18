@@ -1,0 +1,17 @@
+starting_capital_usd = 1000
+symbols = ["BTCUSDT", "ETHUSDT"]
+max_order_notional_usd = 100
+max_total_position_usd = 300
+max_daily_loss_usd = 20
+max_trades_per_day = 6
+min_minutes_between_trades = 30
+max_symbol_allocation_pct = 20
+minimum_confidence = 0.65
+leverage_allowed = false
+shorting_allowed = false
+withdrawals_allowed = false
+max_data_age_seconds = 60
+estimated_fee_rate = 0.001
+estimated_slippage_rate = 0.001
+max_execution_cost_bps = 50
+minimum_net_edge_bps = 5

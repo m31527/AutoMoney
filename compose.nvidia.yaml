@@ -1,0 +1,4 @@
+# DGX Spark / Linux NVIDIA: requires a working NVIDIA Container Toolkit.
+services:
+  ollama:
+    gpus: all

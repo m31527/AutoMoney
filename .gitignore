@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+data/*
+!data/.gitkeep
+*.db
+*.db-shm
+*.db-wal

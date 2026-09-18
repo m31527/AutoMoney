@@ -1,0 +1,58 @@
+services:
+  trader:
+    build: .
+    init: true
+    command: ["compare-start"]
+    environment:
+      TRADING_MODE: PAPER
+      ENABLE_LIVE_TRADING: "false"
+      DATABASE_URL: sqlite:////data/paper.db
+      PAPER_STRATEGY: ${PAPER_STRATEGY:-sma}
+      PAPER_SYMBOL: ${PAPER_SYMBOL:-BTCUSDT}
+      PAPER_CYCLES: ${PAPER_CYCLES:-0}
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      AI_MODEL: ${AI_MODEL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+    volumes:
+      - paper-data:/data
+      - ./config/default.toml:/app/config/default.toml:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  dashboard:
+    build: .
+    init: true
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      TRADING_MODE: PAPER
+      DATABASE_URL: sqlite:////data/paper.db
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - paper-data:/data:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  paper-data:

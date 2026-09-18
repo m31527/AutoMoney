@@ -1,0 +1,11 @@
+**
+!pyproject.toml
+!src/
+!src/**
+!config/
+!config/default.toml
+!docker/
+!docker/entrypoint.sh
+**/__pycache__/
+**/*.pyc
+**/*.egg-info/
