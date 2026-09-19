@@ -45,6 +45,7 @@ def open_account(config: AppConfig, provider: OllamaProvider) -> sqlite3.Connect
             old = connection.execute("SELECT definition FROM local_ai_config WHERE id=1").fetchone()
             if old:
                 previous, current = json.loads(old[0]), json.loads(definition)
+                previous["risk"].setdefault("exit_policy_version", 1)
                 previous.pop("base_url", None)
                 current.pop("base_url", None)
                 if previous != current:

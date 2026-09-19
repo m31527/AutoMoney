@@ -21,6 +21,7 @@ class TradingMode(StrEnum):
 
 @dataclass(frozen=True)
 class RiskConfig:
+    exit_policy_version: int = 1
     starting_capital_usd: Decimal = Decimal("1000")
     symbols: tuple[str, ...] = ("BTCUSDT", "ETHUSDT")
     max_order_notional_usd: Decimal = Decimal("100")
@@ -40,6 +41,8 @@ class RiskConfig:
     minimum_net_edge_bps: Decimal = Decimal("5")
 
     def __post_init__(self) -> None:
+        if type(self.exit_policy_version) is not int or self.exit_policy_version not in (1, 2):
+            raise ConfigError("exit_policy_version must be 1 or 2")
         for field in fields(self):
             value = getattr(self, field.name)
             if isinstance(field.default, Decimal):
@@ -85,6 +88,8 @@ class AppConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.mode, TradingMode):
             raise ConfigError("mode must be a TradingMode")
+        if self.risk.exit_policy_version == 2 and self.mode != TradingMode.PAPER:
+            raise ConfigError("Exit policy v2 is PAPER only")
         if type(self.enable_live_trading) is not bool:
             raise ConfigError("enable_live_trading must be boolean")
         if self.mode == TradingMode.LIVE and not self.enable_live_trading:

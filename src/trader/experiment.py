@@ -78,7 +78,16 @@ class Experiment:
                 old = self.db.execute(
                     "SELECT value FROM experiment_meta WHERE key='definition'"
                 ).fetchone()
-                if old and old[0] != definition:
+                if (
+                    old
+                    and encode(
+                        {
+                            **json.loads(old[0]),
+                            "risk": {"exit_policy_version": 1, **json.loads(old[0])["risk"]},
+                        }
+                    )
+                    != definition
+                ):
                     raise ValueError(
                         "Experiment settings are immutable; use a new database directory"
                     )

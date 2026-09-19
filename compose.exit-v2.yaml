@@ -1,0 +1,7 @@
+services:
+  trader:
+    volumes:
+      - ./config/exit-v2-${EXIT_PAIR:?Set EXIT_PAIR}.toml:/app/config/default.toml:ro
+  dashboard:
+    ports: !override
+      - "${EXIT_DASHBOARD_BIND:-127.0.0.1}:${EXIT_PORT:?Set EXIT_PORT}:8080"

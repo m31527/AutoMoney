@@ -25,7 +25,7 @@ $('ai-account').textContent='淨值 '+(ai.equity==null?'等待有效估值':mone
 const age=ai.updated_at?(Date.now()-new Date(ai.updated_at).getTime())/60000:null;
 $('ai-updated').textContent='開始 '+date(ai.started_at)+' · '+(ai.updated_at?'最後決策 '+date(ai.updated_at)+(age>15?'（超過 15 分鐘未更新）':''):'等待第一筆決策');}
 function renderSummary(data){renderAI(data.ai);if(!data.ready){$('health').textContent='等待第一輪有效行情';$('cards').replaceChildren(element('p','帳本尚未產生觀測資料，請稍後再查看。','muted'));$('chart').replaceChildren();return;}
-const stale=data.age_seconds>900;$('health').textContent=data.killed?'交易已暫停':stale?'資料更新延遲':data.killed===null?'控制狀態未知':'近期資料已更新';$('health-dot').classList.toggle('stale',stale||data.killed!==false);$('updated').textContent='最後觀測 '+date(data.updated_at);$('samples').textContent=data.samples+' 輪觀測';$('errors').textContent='行情錯誤 '+data.error_count+' 次';$('started').textContent='開始 '+date(data.started_at);$('capital').textContent=Number(data.capital).toLocaleString('en-US');cards(data);chart(data.points);if(stale)alertMessage('超過 15 分鐘沒有新觀測。請檢查 Docker、網路或電腦是否進入睡眠；下方仍是最後保存的資料。');}
+$('policy-version').textContent='出場規則版本 '+(data.risk.exit_policy_version||1)+' · '+data.risk.symbols.join(' / ');const stale=data.age_seconds>900;$('health').textContent=data.killed?'交易已暫停':stale?'資料更新延遲':data.killed===null?'控制狀態未知':'近期資料已更新';$('health-dot').classList.toggle('stale',stale||data.killed!==false);$('updated').textContent='最後觀測 '+date(data.updated_at);$('samples').textContent=data.samples+' 輪觀測';$('errors').textContent='行情錯誤 '+data.error_count+' 次';$('started').textContent='開始 '+date(data.started_at);$('capital').textContent=Number(data.capital).toLocaleString('en-US');cards(data);chart(data.points);if(stale)alertMessage('超過 15 分鐘沒有新觀測。請檢查 Docker、網路或電腦是否進入睡眠；下方仍是最後保存的資料。');}
 function renderRecords(data){pages=data.pages;$('records').replaceChildren();$('record-count').textContent=data.total+' 筆';$('page-info').textContent='第 '+page+' / '+pages+' 頁 · 每頁 30 筆';$('prev').disabled=page<=1;$('next').disabled=page>=pages;if(!data.rows.length){const row=element('tr');const cell=element('td','目前沒有符合條件的紀錄。','empty');cell.colSpan=5;row.append(cell);$('records').append(row);return;}
 for(const r of data.rows){const tr=element('tr');tr.append(element('td',date(r.timestamp)),element('td',r.symbol||'—'),element('td',({BUY:'買入',SELL:'賣出',HOLD:'觀望'})[r.action]||'—'));const state=element('td');state.append(element('span',statusLabels[r.status]||r.status,'badge '+r.status));tr.append(state);let text=r.reason?(reasonLabels[r.reason]||r.reason):r.status==='HOLD'?'未提出買賣，等待下一次策略評估':(r.reasons||[]).map(x=>reasonLabels[x]||x).join('、');if(r.order)text='成交 '+num(r.order.executed_qty,8)+' · 價格 '+money(r.order.average_fill_price)+' · 費用 '+money(r.order.fee);const detail=element('td',text);if(r.model_reason)detail.append(element('div','模型／系統說明：'+(reasonLabels[r.model_reason]||r.model_reason),'detail'));if(r.model)detail.append(element('div',r.model,'detail'));if(r.status==='REJECTED'&&r.signal!=null&&r.cost!=null)detail.append(element('div','訊號代理值 '+num(r.signal)+' bps / 來回成本 '+num(r.cost)+' bps','detail'));tr.append(detail);$('records').append(tr);}}
 
@@ -78,3 +78,10 @@ $('next').addEventListener('click',()=>{if(page<pages){page++;sync();}});
 async function monitor(){if(!document.hidden)await sync();setTimeout(monitor,5000);}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync();});
 monitor();
+
+$('export-form').addEventListener('submit',event=>{
+ const a=$('export-start').value,b=$('export-end').value;
+ if(a&&b&&a>=b){event.preventDefault();alertMessage('匯出開始時間必須早於結束時間。');return;}
+ $('export-start-utc').value=a?a+':00+08:00':'';
+ $('export-end-utc').value=b?b+':00+08:00':'';
+});

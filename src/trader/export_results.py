@@ -3,8 +3,10 @@
 import io
 import json
 import zipfile
+from collections import Counter
 from contextlib import ExitStack, closing
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from typing import Any, BinaryIO
@@ -31,9 +33,40 @@ TABLES = {
 }
 
 
-def write_export(root: Path, destination: BinaryIO | SpooledTemporaryFile[bytes]) -> dict[str, Any]:
+def parse_bound(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        raise ValueError("Timezone required")
+    return parsed.astimezone(UTC)
+
+
+def write_export(
+    root: Path,
+    destination: BinaryIO | SpooledTemporaryFile[bytes],
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, Any]:
+    if any(t is not None and t.tzinfo is None for t in (start, end)):
+        raise ValueError("Timezone required")
+    if start and end and start >= end:
+        raise ValueError("Start must precede end")
+    selected: dict[str, list[dict[str, Any]]] = {}
+
+    def in_window(item: dict[str, Any]) -> bool:
+        stamp = datetime.fromisoformat(item.get("timestamp", item.get("created_at", "")))
+        return (start is None or stamp >= start) and (end is None or stamp <= end)
+
     manifest: dict[str, Any] = {
-        "format_version": 1,
+        "format_version": 2,
+        "requested_period": {
+            "from": start.isoformat() if start else None,
+            "to": end.isoformat() if end else None,
+        },
+        "window_semantics": "Inclusive timestamps; ai_calls use request start; "
+        "decisions use completion. "
+        "Summary uses first/last actual observations inside window; no interpolation.",
         "exported_at": datetime.now(UTC).isoformat(),
         "mode": "PAPER",
         "currency": "USDT",
@@ -46,7 +79,7 @@ def write_export(root: Path, destination: BinaryIO | SpooledTemporaryFile[bytes]
         "snapshots are not atomic across databases. Align by timestamps.",
         "limitations": [
             "No training or automatic strategy modification is performed.",
-            "Ollama retains the deterministic SMA edge proxy and risk veto.",
+            "BUY retains SMA edge proxy; SELL gates depend on exit_policy_version.",
             "Equity includes paid fees, not future liquidation fees.",
             "Model calls and price samples have different times; do not assume identical fills.",
         ],
@@ -65,12 +98,16 @@ def write_export(root: Path, destination: BinaryIO | SpooledTemporaryFile[bytes]
 
         def write_rows(name: str, rows: Any) -> None:
             count = 0
+            selected[name] = []
             with archive.open(name, "w") as raw, io.TextIOWrapper(raw, encoding="utf-8") as stream:
                 for row in rows:
                     item = dict(row)
+                    if not in_window(item):
+                        continue
                     for key in list(item):
                         if key.endswith("_json") and item[key] is not None:
                             item[key.removesuffix("_json")] = json.loads(item.pop(key))
+                    selected[name].append(item)
                     stream.write(encode(item) + "\n")
                     count += 1
             manifest["files"][name] = count
@@ -116,7 +153,34 @@ def write_export(root: Path, destination: BinaryIO | SpooledTemporaryFile[bytes]
                     settings.pop("base_url", None)
                     manifest["definitions"][name] = settings
             for category, sql in TABLES.items():
-                write_rows(name + "/" + category + ".jsonl", db.execute(sql))
+                # Push time filtering into SQLite; do not read full history for every export.
+                column = "created_at" if category == "orders" else "timestamp"
+                filtered = (
+                    f"SELECT * FROM ({sql}) "
+                    f"WHERE (? IS NULL OR julianday({column}) >= julianday(?)) "
+                    f"AND (? IS NULL OR julianday({column}) <= julianday(?))"
+                )
+                a, b = start.isoformat() if start else None, end.isoformat() if end else None
+                write_rows(name + "/" + category + ".jsonl", db.execute(filtered, (a, a, b, b)))
+            values = selected[name + "/equity.jsonl"]
+            manifest["books"][name].update(
+                {
+                    "first_valuation": values[0]["timestamp"] if values else None,
+                    "last_valuation": values[-1]["timestamp"] if values else None,
+                    "last_equity": values[-1]["equity"] if values else None,
+                    "account_scope": "Current account at export time; not period opening balance",
+                }
+            )
+            if start:
+                opening = db.execute(
+                    "SELECT * FROM portfolio_snapshots WHERE julianday(timestamp)<=julianday(?) "
+                    "ORDER BY timestamp DESC,id DESC LIMIT 1",
+                    (start.isoformat(),),
+                ).fetchone()
+                archive.writestr(
+                    name + "/opening_observation.json", encode(dict(opening) if opening else None)
+                )
+
         spans = [manifest["books"].get(name) for name in ("sma5m", "trend1h", "ollama")]
         if all(s and s["first_valuation"] and s["last_valuation"] for s in spans):
             starts = [datetime.fromisoformat(s["first_valuation"]) for s in spans if s]
@@ -127,6 +191,97 @@ def write_export(root: Path, destination: BinaryIO | SpooledTemporaryFile[bytes]
             )
         else:
             manifest["common_period"] = None
+        analysis: dict[str, Any] = {
+            "definitions": manifest["definitions"],
+            "period": manifest["requested_period"],
+            "portfolios": {},
+            "activity": {},
+        }
+
+        def metrics(values: list[dict[str, Any]]) -> dict[str, Any] | None:
+            if not values:
+                return None
+            first, last = Decimal(values[0]["equity"]), Decimal(values[-1]["equity"])
+            peak, drawdown = first, Decimal(0)
+            for row in values:
+                value = Decimal(row["equity"])
+                peak = max(peak, value)
+                drawdown = max(drawdown, (peak - value) / peak * 100)
+            return {
+                "from": values[0]["timestamp"],
+                "to": values[-1]["timestamp"],
+                "opening_equity": str(first),
+                "closing_equity": str(last),
+                "period_pnl": str(last - first),
+                "return_pct": str((last / first - 1) * 100),
+                "sampled_drawdown_pct": str(drawdown),
+                "observations": len(values),
+            }
+
+        for name in BOOKS:
+            analysis["portfolios"][name] = metrics(selected.get(name + "/equity.jsonl", []))
+            decisions = selected.get(name + "/decisions.jsonl", [])
+            calls = selected.get(name + "/ai_calls.jsonl", [])
+            analysis["activity"][name] = {
+                "statuses": dict(Counter(d["result"]["status"] for d in decisions)),
+                "rejected_actions": dict(
+                    Counter(
+                        d["result"]["action"]
+                        for d in decisions
+                        if d["result"]["status"] == "REJECTED"
+                    )
+                ),
+                "rejection_reasons": dict(
+                    Counter(
+                        r
+                        for d in decisions
+                        if d["result"]["status"] == "REJECTED"
+                        for r in d["result"]["reasons"]
+                    )
+                ),
+                "actions": dict(Counter(d["result"]["action"] for d in decisions)),
+                "stale_market_checks": sum(
+                    "MARKET_DATA_FRESH_VALID" in r["result"]["reasons"]
+                    for r in selected.get(name + "/risk.jsonl", [])
+                ),
+                "calls": len(calls),
+                "call_failures": sum(c["error"] is not None for c in calls),
+                "fees_paid_in_period": str(
+                    sum(
+                        (Decimal(f["fee_usdt"]) for f in selected.get(name + "/fills.jsonl", [])),
+                        Decimal(0),
+                    )
+                ),
+            }
+        samples = selected.get("comparison/samples.jsonl", [])
+        for arm in ("hold", "cash"):
+            analysis["portfolios"][arm] = metrics(
+                [
+                    {
+                        "timestamp": r["timestamp"],
+                        "equity": r["sample"]["portfolios"][arm]["equity"],
+                    }
+                    for r in samples
+                ]
+            )
+        archive.writestr("summary.json", encode(analysis))
+        lines = [
+            "# 區間分析摘要",
+            "先讀 summary.json；詳細查核再讀各組 JSONL。",
+            "損益使用區間內首末實際估值，時間可能與所選邊界不同；不補造價格。",
+            "費用已包含於淨值，不可重複扣除；尚未扣未來退出成本。",
+            "",
+        ]
+        for name, value in analysis["portfolios"].items():
+            if value:
+                lines.append(
+                    f"- {name}: {value['from']} 至 {value['to']}；"
+                    f"區間損益 {value['period_pnl']} USDT；報酬 {value['return_pct']}%；"
+                    f"取樣最大回落 {value['sampled_drawdown_pct']}%"
+                )
+        lines.extend(["", "## 決策統計", encode(analysis["activity"])])
+        lines.extend(["", "## 實驗設定", encode(manifest["definitions"])])
+        archive.writestr("START_HERE.md", "\n".join(lines))
         archive.writestr("manifest.json", encode(manifest))
         archive.writestr(
             "README.txt",

@@ -304,10 +304,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send(200, (WEB / name).read_bytes(), mime)
                 return
             if url.path == "/api/export":
-                from trader.export_results import write_export
+                from trader.export_results import parse_bound, write_export
 
                 with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as output:
-                    write_export(self.root, output)
+                    query = parse_qs(url.query, max_num_fields=8)
+                    write_export(
+                        self.root,
+                        output,
+                        start=parse_bound(query.get("start", [None])[0]),
+                        end=parse_bound(query.get("end", [None])[0]),
+                    )
                     size = output.tell()
                     output.seek(0)
                     self.send_response(200)

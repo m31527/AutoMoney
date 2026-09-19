@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -19,7 +19,7 @@ from trader.risk.service import RiskService
 from trader.safety.kill_switch import KillSwitch
 from trader.storage.repository import encode, json_default
 from trader.storage.transaction import transaction
-from trader.strategy.baseline import Strategy
+from trader.strategy.baseline import HourlyTrendStrategy, SMAStrategy, Strategy
 
 ZERO = Decimal(0)
 
@@ -212,6 +212,25 @@ class PaperEngine:
             tickers = tuple(m.ticker for m in markets.values())
             snapshot = self._snapshot(markets[symbol], tickers, now)
             decision = strategy.propose(snapshot, now)
+            if (
+                self.config.risk.exit_policy_version == 2
+                and decision.proposal.action == Action.SELL
+                and isinstance(strategy, (SMAStrategy, HourlyTrendStrategy))
+            ):
+                # Baseline exits reduce the whole holding up to the existing order cap.
+                ticker = markets[symbol].ticker
+                upper = max(ticker.ask, ticker.last_price) * (
+                    1 + self.config.risk.estimated_slippage_rate
+                )
+                decision = replace(
+                    decision,
+                    proposal=replace(
+                        decision.proposal,
+                        requested_notional_usd=min(
+                            snapshot.position * upper, self.config.risk.max_order_notional_usd
+                        ),
+                    ),
+                )
             if decision.proposal.symbol != symbol:
                 raise ValueError("Strategy changed the selected symbol")
             state, positions = self._state(), self._positions()

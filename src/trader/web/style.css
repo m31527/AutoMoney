@@ -3,3 +3,5 @@
 .intro-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.intro-actions a{text-decoration:none}
 
 .market-prices{display:flex;flex-wrap:wrap;gap:12px 30px;margin:18px 0;color:var(--green)}.holding-account{border-top:1px solid var(--line);padding:12px 0}.holding-account h3{margin:0 0 5px;font-size:14px}.intro-actions a{color:var(--green)}
+
+#export-form{display:flex;gap:8px;flex-wrap:wrap;max-width:540px;align-items:end}input{background:#162128;color:var(--text);border:1px solid #34454e;border-radius:6px;padding:8px}#export-form p{width:100%}

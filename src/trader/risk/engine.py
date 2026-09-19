@@ -167,6 +167,8 @@ class RiskEngine:
                 and costs <= cfg.max_execution_cost_bps
                 and context.expected_edge_bps - costs >= cfg.minimum_net_edge_bps
             )
+            if proposal.action == Action.SELL and cfg.exit_policy_version == 2:
+                costs_ok = costs <= cfg.max_execution_cost_bps
             position = next((p for p in valuation.positions if p.symbol == proposal.symbol), None)
             existing = position.exposure if position else ZERO
             if proposal.action == Action.BUY:
@@ -180,6 +182,10 @@ class RiskEngine:
                     position is not None
                     and quantity * (1 + cfg.estimated_fee_rate) <= position.free_quantity
                 )
+                if cfg.exit_policy_version == 2:
+                    # PAPER fees are charged in quote currency, not sold base quantity.
+                    quantity = min(quantity, position.free_quantity) if position else ZERO
+                    funds_ok = position is not None and ZERO < quantity <= position.free_quantity
                 projected_total = valuation.exposure - quantity * ticker.last_price
                 projected_symbol = existing - quantity * ticker.last_price
                 projected_equity = valuation.equity - (ticker.last_price - lower) * quantity - fee
@@ -187,6 +193,9 @@ class RiskEngine:
             allocation_ok = (
                 ZERO <= projected_symbol <= projected_equity * cfg.max_symbol_allocation_pct / 100
             )
+            if proposal.action == Action.SELL and cfg.exit_policy_version == 2:
+                total_ok = ZERO <= projected_total <= valuation.exposure
+                allocation_ok = ZERO <= projected_symbol <= existing
         check("BALANCE_AND_NO_SHORTING", funds_ok)
         check("TOTAL_EXPOSURE_LIMIT", total_ok)
         check("SYMBOL_ALLOCATION_LIMIT", allocation_ok)
