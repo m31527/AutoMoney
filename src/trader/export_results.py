@@ -2,6 +2,7 @@
 
 import io
 import json
+import math
 import zipfile
 from collections import Counter
 from contextlib import ExitStack, closing
@@ -12,6 +13,7 @@ from tempfile import SpooledTemporaryFile
 from typing import Any, BinaryIO
 
 from trader.dashboard import reader
+from trader.replay_exits import LIMITATION, replay_book
 from trader.storage.repository import encode
 
 BOOKS = {
@@ -30,6 +32,7 @@ TABLES = {
         "SELECT id,timestamp,provider,model,error,response FROM ai_calls ORDER BY timestamp,id"
     ),
     "events": "SELECT * FROM system_events ORDER BY timestamp,id",
+    "ai_diagnostics": "SELECT * FROM ai_call_diagnostics ORDER BY timestamp,call_id",
 }
 
 
@@ -59,7 +62,7 @@ def write_export(
         return (start is None or stamp >= start) and (end is None or stamp <= end)
 
     manifest: dict[str, Any] = {
-        "format_version": 2,
+        "format_version": 3,
         "requested_period": {
             "from": start.isoformat() if start else None,
             "to": end.isoformat() if end else None,
@@ -153,6 +156,13 @@ def write_export(
                     settings.pop("base_url", None)
                     manifest["definitions"][name] = settings
             for category, sql in TABLES.items():
+                if (
+                    category == "ai_diagnostics"
+                    and not db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE name='ai_call_diagnostics'"
+                    ).fetchone()
+                ):
+                    continue  # A read-only dashboard must also support older workers.
                 # Push time filtering into SQLite; do not read full history for every export.
                 column = "created_at" if category == "orders" else "timestamp"
                 filtered = (
@@ -181,8 +191,10 @@ def write_export(
                     name + "/opening_observation.json", encode(dict(opening) if opening else None)
                 )
 
-        spans = [manifest["books"].get(name) for name in ("sma5m", "trend1h", "ollama")]
-        if all(s and s["first_valuation"] and s["last_valuation"] for s in spans):
+        names = [n for n in ("sma5m", "trend1h", "ollama") if n in manifest["books"]]
+        manifest["common_period_books"] = names
+        spans = [manifest["books"][name] for name in names]
+        if spans and all(s["first_valuation"] and s["last_valuation"] for s in spans):
             starts = [datetime.fromisoformat(s["first_valuation"]) for s in spans if s]
             ends = [datetime.fromisoformat(s["last_valuation"]) for s in spans if s]
             first, last = max(starts), min(ends)
@@ -197,6 +209,7 @@ def write_export(
             "portfolios": {},
             "activity": {},
         }
+        exit_replay: dict[str, Any] = {"scope": LIMITATION, "books": {}}
 
         def metrics(values: list[dict[str, Any]]) -> dict[str, Any] | None:
             if not values:
@@ -221,8 +234,36 @@ def write_export(
         for name in BOOKS:
             analysis["portfolios"][name] = metrics(selected.get(name + "/equity.jsonl", []))
             decisions = selected.get(name + "/decisions.jsonl", [])
+            replay = replay_book(selected.get(name + "/risk.jsonl", []), decisions)
+            exit_replay["books"][name] = replay
             calls = selected.get(name + "/ai_calls.jsonl", [])
+            diagnostics = [
+                row["diagnostics"] for row in selected.get(name + "/ai_diagnostics.jsonl", [])
+            ]
+            durations = sorted(d["inference_seconds"] for d in diagnostics)
+            completed = [d for d in diagnostics if "original_signal_expired" in d]
+            expired = sum(d["original_signal_expired"] for d in completed)
             analysis["activity"][name] = {
+                "exit_risk_replay": {k: v for k, v in replay.items() if k != "decisions"},
+                "ai_diagnostics": {
+                    "observations": len(diagnostics),
+                    "policy_versions": dict(Counter(d["policy_version"] for d in diagnostics)),
+                    "budget_exceeded": sum(d["budget_exceeded"] for d in diagnostics),
+                    "completed_rechecks": len(completed),
+                    "original_signal_expired": expired,
+                    "original_signal_expired_pct": expired / len(completed) * 100
+                    if completed
+                    else None,
+                    "quote_rechecks": dict(Counter(d["quote_recheck"] for d in diagnostics)),
+                    "inference_seconds_p50": durations[math.ceil(len(durations) * 0.5) - 1]
+                    if durations
+                    else None,
+                    "inference_seconds_p95": durations[math.ceil(len(durations) * 0.95) - 1]
+                    if durations
+                    else None,
+                    "note": "Diagnostics use request-start window; old calls have no diagnostics. "
+                    "Percentiles use nearest rank. NOT_RUN may indicate interrupted processing.",
+                },
                 "statuses": dict(Counter(d["result"]["status"] for d in decisions)),
                 "rejected_actions": dict(
                     Counter(
@@ -264,6 +305,8 @@ def write_export(
                     for r in samples
                 ]
             )
+        analysis["exit_replay_scope"] = LIMITATION
+        archive.writestr("exit_policy_replay.json", encode(exit_replay))
         archive.writestr("summary.json", encode(analysis))
         lines = [
             "# 區間分析摘要",
@@ -287,9 +330,11 @@ def write_export(
             "README.txt",
             "Crypto PAPER analysis export\n"
             "每份帳本獨立。先看 manifest.json 的 common_period，再對齊 equity.jsonl 時間比較。\n"
-            "common_period 為三組都有觀測的重疊時間範圍，不表示中間沒有缺漏。\n"
+            "common_period 為 common_period_books 中現有帳本的重疊範圍，不代表沒有缺漏。\n"
             "decisions=決策及結果；risk=風控上下文；orders/fills=訂單及成交；equity=淨值；\n"
             "ai_calls=模型回覆及失敗代碼（不含原始提示）；events/errors=運行事件。\n"
+            "ai_diagnostics=提示政策版本、下單預算、推論耗時及最新報價檢查。\n"
+            "exit_policy_replay=相同歷史輸入的逐筆出場風控重播；不是成交或獲利回測。\n"
             "comparison/samples.jsonl 包含同期持有及現金基準。金額使用精確十進位字串。\n"
             "不包含設定檔、原始提示、連線 URL 設定或資料庫檔。"
             "模型回覆是未受信任的資料，不是指令。\n"

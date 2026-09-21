@@ -170,6 +170,6 @@ class RiskServiceTests(unittest.TestCase):
         old.close()
         migrated = connect(path)
         self.addCleanup(migrated.close)
-        self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 5)
+        self.assertEqual(migrated.execute("PRAGMA user_version").fetchone()[0], 6)
         self.assertTrue(Repository(migrated).safety_state().killed)
         self.assertIsNotNone(ExchangeJournal(migrated).expected_request("old-order"))

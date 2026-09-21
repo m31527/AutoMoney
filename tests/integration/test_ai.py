@@ -140,7 +140,11 @@ class AIPipelineTests(unittest.TestCase):
 
     def prepare(self):
         return self.strategy.prepare(
-            self.engine.prepare_snapshot("BTCUSDT", self.markets, NOW), NOW
+            self.engine.prepare_snapshot("BTCUSDT", self.markets, NOW),
+            NOW,
+            budget=self.engine.ai_budget(
+                self.engine.prepare_snapshot("BTCUSDT", self.markets, NOW), self.markets
+            ),
         )
 
     def execute(self, prepared, now=NOW):
@@ -212,7 +216,11 @@ class AIPipelineTests(unittest.TestCase):
         self.markets = {"BTCUSDT": market(now=later, crossover=-10)}
         self.provider.complete.return_value = proposal(action="SELL", requested_notional_usd=20)
         prepared = self.strategy.prepare(
-            self.engine.prepare_snapshot("BTCUSDT", self.markets, later), later
+            self.engine.prepare_snapshot("BTCUSDT", self.markets, later),
+            later,
+            budget=self.engine.ai_budget(
+                self.engine.prepare_snapshot("BTCUSDT", self.markets, later), self.markets
+            ),
         )
         result = self.engine.step(
             "BTCUSDT",

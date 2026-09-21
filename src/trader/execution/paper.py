@@ -20,6 +20,7 @@ from trader.safety.kill_switch import KillSwitch
 from trader.storage.repository import encode, json_default
 from trader.storage.transaction import transaction
 from trader.strategy.baseline import HourlyTrendStrategy, SMAStrategy, Strategy
+from trader.strategy.budget import TradeBudget, trade_budget
 
 ZERO = Decimal(0)
 
@@ -169,6 +170,16 @@ class PaperEngine:
             ):
                 raise ValueError("Incomplete or mismatched market observations")
             return self._snapshot(markets[symbol], tuple(m.ticker for m in markets.values()), now)
+
+    def ai_budget(
+        self, snapshot: MarketSnapshot, markets: dict[str, MarketObservation]
+    ) -> TradeBudget:
+        with transaction(self.connection):
+            exposure = sum(
+                (q * markets[s].ticker.last_price for s, (q, _) in self._positions().items() if q),
+                ZERO,
+            )
+            return trade_budget(snapshot, self.config.risk, exposure)
 
     def step(
         self,

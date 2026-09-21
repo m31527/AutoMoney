@@ -52,6 +52,12 @@ def ai_summary(root: Path) -> dict[str, Any]:
         counts = db.execute("SELECT COUNT(*),SUM(error IS NOT NULL) FROM ai_calls").fetchone()
         trades = db.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
         portfolio = json.loads(latest[1])["portfolio"] if latest else {}
+        diagnostic = None
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='ai_call_diagnostics'").fetchone():
+            row = db.execute(
+                "SELECT diagnostics_json FROM ai_call_diagnostics ORDER BY call_id DESC LIMIT 1"
+            ).fetchone()
+            diagnostic = json.loads(row[0]) if row else None
         return {
             "available": True,
             "model": json.loads(definition[0])["model"],
@@ -64,6 +70,8 @@ def ai_summary(root: Path) -> dict[str, Any]:
             "fees": account["fees"],
             "equity": portfolio.get("equity"),
             "net_pnl": portfolio.get("net_pnl"),
+            "policy_version": diagnostic["policy_version"] if diagnostic else None,
+            "last_inference_seconds": diagnostic["inference_seconds"] if diagnostic else None,
         }
 
 

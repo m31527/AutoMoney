@@ -124,6 +124,7 @@ class OllamaWorkerTests(unittest.TestCase):
     def run_worker(self, **kwargs):
         exchange = MagicMock()
         exchange.get_average_price.side_effect = lambda s: averages()[s]
+        exchange.get_ticker.side_effect = lambda s: observations()[s].ticker
         outputs = []
         with (
             patch("trader.local_ai.BinanceSpotAdapter", return_value=exchange),

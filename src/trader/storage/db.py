@@ -137,6 +137,18 @@ COMMIT;
 """
 
 
+MIGRATION_6 = """
+BEGIN IMMEDIATE;
+CREATE TABLE IF NOT EXISTS ai_call_diagnostics (
+    call_id INTEGER PRIMARY KEY REFERENCES ai_calls(id),
+    timestamp TEXT NOT NULL,
+    diagnostics_json TEXT NOT NULL
+);
+PRAGMA user_version = 6;
+COMMIT;
+"""
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
@@ -146,7 +158,7 @@ def connect(path: Path) -> sqlite3.Connection:
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA synchronous = FULL")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (0, 1, 2, 3, 4, 5):
+        if version not in (0, 1, 2, 3, 4, 5, 6):
             raise RuntimeError("Unsupported database schema version")
         if version == 0:
             connection.executescript(SCHEMA)
@@ -158,6 +170,8 @@ def connect(path: Path) -> sqlite3.Connection:
             connection.executescript(MIGRATION_4)
         if version < 5:
             connection.executescript(MIGRATION_5)
+        if version < 6:
+            connection.executescript(MIGRATION_6)
         return connection
     except Exception:
         connection.close()

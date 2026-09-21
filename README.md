@@ -2,6 +2,8 @@
 
 依照 `AI_Crypto_Trading_MVP_Codex.md` 分階段開發，目前已完成 Foundation、交易所唯讀介面、確定性風控，**Phase D baseline 策略與 PAPER 模擬交易管線**，以及 **Phase E AI 策略介面**。本專案是現貨交易實驗，沒有獲利保證。PAPER 使用正式市場公開行情，在本機模擬成交；交易所網路下單／取消仍封鎖。AI 為可選策略，預設仍是 HOLD。`resume` 只解除全域停止旗標，不解除當日已觸發的日損限制。
 
+已部署的 Spark 更新下單預算、行情檢查與出場重播：請看 [2026-09-21 更新說明](AI_BUDGET_UPDATE.md)。
+
 ## 搬機、自訂 Ollama URL 與匯出
 
 請看 [簡易安裝說明](OLLAMA_START.md)：填入 `config/ollama.env` 的 URL 與模型名稱，執行 `bash scripts/ai.sh start`，同時啟動原本規則組與 Ollama 模擬組。網頁右上角「匯出分析資料」可下載 ZIP，供後續比較。

@@ -118,6 +118,8 @@ class ExportTests(unittest.TestCase):
                 root, out, NOW + timedelta(minutes=5), NOW + timedelta(minutes=10)
             )
             self.assertEqual(result["files"]["comparison/samples.jsonl"], 2)
+            self.assertEqual(result["common_period_books"], ["sma5m", "trend1h"])
+            self.assertIsNotNone(result["common_period"])
             with zipfile.ZipFile(out) as z:
                 data = json.loads(z.read("summary.json"))
                 self.assertEqual(data["portfolios"]["hold"]["observations"], 2)
