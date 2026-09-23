@@ -198,4 +198,22 @@ class OllamaWorkerTests(unittest.TestCase):
             )
         complete.assert_not_called()
         self.assertEqual(len(out), 2)
-        self.assertEqual(records(self.root, "ai-events", "ALL", 1)["total"], 2)
+        self.assertEqual(records(self.root, "ai-events", "ALL", 1)["total"], 3)
+        self.assertEqual(
+            sum(r["status"] == "ERROR" for r in records(self.root, "ai-events", "ALL", 1)["rows"]),
+            2,
+        )
+
+    def test_prefilter_flag_is_explicit_visible_and_reversible(self):
+        for enabled in ("true", "false"):
+            with (
+                patch.dict("os.environ", {"AI_PREFILTER_ENABLED": enabled}),
+                patch.object(OllamaProvider, "complete", return_value=proposal()),
+            ):
+                self.run_worker()
+            self.assertEqual(ai_summary(self.root)["prefilter_enabled"], enabled == "true")
+        with (
+            patch.dict("os.environ", {"AI_PREFILTER_ENABLED": "tru"}),
+            self.assertRaises(ValueError),
+        ):
+            self.run_worker()

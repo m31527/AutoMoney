@@ -1,0 +1,5 @@
+# Optional call filtering in the existing worker; no extra GPU service.
+services:
+  ai-trader:
+    environment:
+      AI_PREFILTER_ENABLED: ${AI_PREFILTER_ENABLED:-true}

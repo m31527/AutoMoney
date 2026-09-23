@@ -243,7 +243,23 @@ def write_export(
             durations = sorted(d["inference_seconds"] for d in diagnostics)
             completed = [d for d in diagnostics if "original_signal_expired" in d]
             expired = sum(d["original_signal_expired"] for d in completed)
+            prefilters = [
+                e["payload"]
+                for e in selected.get(name + "/events.jsonl", [])
+                if e["event_type"] == "AI_PREFILTER_EVALUATED"
+            ]
+            skipped = sum(e["skipped"] for e in prefilters)
             analysis["activity"][name] = {
+                "ai_prefilter": {
+                    "evaluations": len(prefilters),
+                    "skipped_model_calls": skipped,
+                    "skip_pct": skipped / len(prefilters) * 100 if prefilters else None,
+                    "reasons": dict(Counter(e["reason"] for e in prefilters)),
+                    "policy_versions": dict(Counter(e["policy_version"] for e in prefilters)),
+                    "note": "Evaluations use pre-call timestamps. Skips are local HOLD decisions, "
+                    "not model responses, failures, fills, or measured GPU savings. "
+                    "Filter changes decision sampling; compare separately from earlier runs.",
+                },
                 "exit_risk_replay": {k: v for k, v in replay.items() if k != "decisions"},
                 "ai_diagnostics": {
                     "observations": len(diagnostics),

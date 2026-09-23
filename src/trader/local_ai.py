@@ -2,6 +2,7 @@
 
 import fcntl
 import json
+import os
 import sqlite3
 import time
 from collections.abc import Callable
@@ -72,6 +73,9 @@ def run_local_ai(
 ) -> None:
     if type(cycles) is not int or cycles < 0:
         raise ValueError("Nonnegative cycle count required")
+    flag = os.environ.get("AI_PREFILTER_ENABLED", "false")
+    if flag not in ("true", "false"):
+        raise ValueError("AI_PREFILTER_ENABLED must be true or false")
     root = config.database_path.parent / "ollama"
     root.mkdir(parents=True, exist_ok=True)
     with (root / "worker.lock").open("a") as lock:
@@ -85,6 +89,22 @@ def run_local_ai(
                 account_config = replace(config, database_url="sqlite:///" + str(root / "paper.db"))
                 engine = PaperEngine(connection, account_config, switch)
                 engine.initialize(clock())
+                with transaction(connection):
+                    connection.execute(
+                        "INSERT INTO system_events(timestamp,severity,event_type,payload_json) "
+                        "VALUES (?,?,?,?)",
+                        (
+                            json_default(clock()),
+                            "INFO",
+                            "AI_PREFILTER_MODE",
+                            encode(
+                                {
+                                    "enabled": flag == "true",
+                                    "policy_version": "flat-cost-prefilter-v1",
+                                }
+                            ),
+                        ),
+                    )
                 strategy = AIStrategy(provider, connection)
                 exchange = BinanceSpotAdapter(
                     config.mode, kill_switch=switch, symbols=config.risk.symbols
@@ -108,6 +128,7 @@ def run_local_ai(
                                     strategy,
                                     symbol,
                                     cycles=1,
+                                    ai_prefilter=flag == "true",
                                     emit=emit,
                                     clock=clock,
                                     sleep=sleep,

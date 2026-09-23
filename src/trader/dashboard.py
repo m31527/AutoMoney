@@ -52,6 +52,15 @@ def ai_summary(root: Path) -> dict[str, Any]:
         counts = db.execute("SELECT COUNT(*),SUM(error IS NOT NULL) FROM ai_calls").fetchone()
         trades = db.execute("SELECT COUNT(*) FROM fills").fetchone()[0]
         portfolio = json.loads(latest[1])["portfolio"] if latest else {}
+        mode = db.execute(
+            "SELECT payload_json FROM system_events WHERE event_type='AI_PREFILTER_MODE' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        prefilter_enabled = json.loads(mode[0])["enabled"] if mode else False
+        skipped = db.execute(
+            "SELECT COUNT(*) FROM paper_cycles WHERE "
+            "json_extract(result_json,'$.strategy_reason')='AI_PREFILTER_COST_BLOCKED'"
+        ).fetchone()[0]
         diagnostic = None
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='ai_call_diagnostics'").fetchone():
             row = db.execute(
@@ -60,6 +69,8 @@ def ai_summary(root: Path) -> dict[str, Any]:
             diagnostic = json.loads(row[0]) if row else None
         return {
             "available": True,
+            "prefilter_enabled": prefilter_enabled,
+            "prefilter_skipped": skipped,
             "model": json.loads(definition[0])["model"],
             "started_at": account["initialized_at"],
             "updated_at": latest[0] if latest else None,

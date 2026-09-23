@@ -4,6 +4,8 @@
 
 已部署的 Spark 更新下單預算、行情檢查與出場重播：請看 [2026-09-21 更新說明](AI_BUDGET_UPDATE.md)。
 
+降低空倉期間模型呼叫：[空倉成本預篩實驗更新](AI_PREFILTER_UPDATE.md)。
+
 ## 搬機、自訂 Ollama URL 與匯出
 
 請看 [簡易安裝說明](OLLAMA_START.md)：填入 `config/ollama.env` 的 URL 與模型名稱，執行 `bash scripts/ai.sh start`，同時啟動原本規則組與 Ollama 模擬組。網頁右上角「匯出分析資料」可下載 ZIP，供後續比較。
