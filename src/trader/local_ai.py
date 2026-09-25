@@ -21,6 +21,7 @@ from trader.storage.repository import encode, json_default
 from trader.storage.transaction import transaction
 from trader.strategy.ai_strategy import AIStrategy
 from trader.strategy.ollama import OllamaProvider
+from trader.strategy.prefilter import DIRECTION_VERSION, VERSION
 
 
 def open_account(config: AppConfig, provider: OllamaProvider) -> sqlite3.Connection:
@@ -76,6 +77,11 @@ def run_local_ai(
     flag = os.environ.get("AI_PREFILTER_ENABLED", "false")
     if flag not in ("true", "false"):
         raise ValueError("AI_PREFILTER_ENABLED must be true or false")
+    direction = os.environ.get("AI_DIRECTION_FILTER_ENABLED", "false")
+    if direction not in ("true", "false"):
+        raise ValueError("AI_DIRECTION_FILTER_ENABLED must be true or false")
+    if direction == "true" and flag != "true":
+        raise ValueError("Direction filter requires AI prefilter")
     root = config.database_path.parent / "ollama"
     root.mkdir(parents=True, exist_ok=True)
     with (root / "worker.lock").open("a") as lock:
@@ -100,7 +106,10 @@ def run_local_ai(
                             encode(
                                 {
                                     "enabled": flag == "true",
-                                    "policy_version": "flat-cost-prefilter-v1",
+                                    "direction_enabled": direction == "true",
+                                    "policy_version": DIRECTION_VERSION
+                                    if direction == "true"
+                                    else VERSION,
                                 }
                             ),
                         ),
@@ -129,6 +138,7 @@ def run_local_ai(
                                     symbol,
                                     cycles=1,
                                     ai_prefilter=flag == "true",
+                                    ai_direction_filter=direction == "true",
                                     emit=emit,
                                     clock=clock,
                                     sleep=sleep,

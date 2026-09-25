@@ -3,3 +3,4 @@ services:
   ai-trader:
     environment:
       AI_PREFILTER_ENABLED: ${AI_PREFILTER_ENABLED:-true}
+      AI_DIRECTION_FILTER_ENABLED: ${AI_DIRECTION_FILTER_ENABLED:-false}

@@ -13,6 +13,7 @@ from tempfile import SpooledTemporaryFile
 from typing import Any, BinaryIO
 
 from trader.dashboard import reader
+from trader.direction_study import study
 from trader.replay_exits import LIMITATION, replay_book
 from trader.storage.repository import encode
 
@@ -248,8 +249,16 @@ def write_export(
                 for e in selected.get(name + "/events.jsonl", [])
                 if e["event_type"] == "AI_PREFILTER_EVALUATED"
             ]
+            directional_study = study(
+                [
+                    e
+                    for e in selected.get(name + "/events.jsonl", [])
+                    if e["event_type"] == "AI_PREFILTER_EVALUATED"
+                ]
+            )
             skipped = sum(e["skipped"] for e in prefilters)
             analysis["activity"][name] = {
+                "direction_study": directional_study,
                 "ai_prefilter": {
                     "evaluations": len(prefilters),
                     "skipped_model_calls": skipped,
@@ -265,6 +274,9 @@ def write_export(
                     "observations": len(diagnostics),
                     "policy_versions": dict(Counter(d["policy_version"] for d in diagnostics)),
                     "budget_exceeded": sum(d["budget_exceeded"] for d in diagnostics),
+                    "entry_direction_blocked": sum(
+                        d.get("entry_direction_blocked", False) for d in diagnostics
+                    ),
                     "completed_rechecks": len(completed),
                     "original_signal_expired": expired,
                     "original_signal_expired_pct": expired / len(completed) * 100

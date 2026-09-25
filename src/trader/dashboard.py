@@ -57,9 +57,12 @@ def ai_summary(root: Path) -> dict[str, Any]:
             "ORDER BY id DESC LIMIT 1"
         ).fetchone()
         prefilter_enabled = json.loads(mode[0])["enabled"] if mode else False
+        direction_enabled = json.loads(mode[0]).get("direction_enabled", False) if mode else False
         skipped = db.execute(
             "SELECT COUNT(*) FROM paper_cycles WHERE "
-            "json_extract(result_json,'$.strategy_reason')='AI_PREFILTER_COST_BLOCKED'"
+            "json_extract(result_json,'$.strategy_reason') IN "
+            "('AI_PREFILTER_COST_BLOCKED','AI_PREFILTER_DIRECTION_BLOCKED',"
+            "'AI_PREFILTER_DIRECTION_UNAVAILABLE')"
         ).fetchone()[0]
         diagnostic = None
         if db.execute("SELECT 1 FROM sqlite_master WHERE name='ai_call_diagnostics'").fetchone():
@@ -70,6 +73,7 @@ def ai_summary(root: Path) -> dict[str, Any]:
         return {
             "available": True,
             "prefilter_enabled": prefilter_enabled,
+            "direction_filter_enabled": direction_enabled,
             "prefilter_skipped": skipped,
             "model": json.loads(definition[0])["model"],
             "started_at": account["initialized_at"],

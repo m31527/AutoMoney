@@ -27,12 +27,15 @@ def run_paper(
     *,
     cycles: int = 1,
     ai_prefilter: bool = False,
+    ai_direction_filter: bool = False,
     emit: Callable[[dict[str, Any]], None],
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> None:
     if type(cycles) is not int or cycles < 0:
         raise ValueError("cycles must be nonnegative; zero means continuous")
+    if ai_direction_filter and not ai_prefilter:
+        raise ValueError("Direction filter requires AI prefilter")
     completed = 0
     while cycles == 0 or completed < cycles:
         markets = {
@@ -47,7 +50,11 @@ def run_paper(
             if ai_prefilter:
                 account_flat = not any(q for q, _ in engine.status()["positions"].values())
                 evaluation = evaluate(
-                    snapshot, engine.config.risk, clock(), account_flat=account_flat
+                    snapshot,
+                    engine.config.risk,
+                    clock(),
+                    account_flat=account_flat,
+                    direction_filter=ai_direction_filter,
                 )
                 evaluation["cycle_id"] = cycle_id
                 skip = evaluation["skipped"]
@@ -63,13 +70,16 @@ def run_paper(
                         ),
                     )
             if skip:
-                prepared = PrefilterHold()
+                prepared = PrefilterHold(
+                    name=evaluation["policy_version"], reason=evaluation["reason"]
+                )
             else:
                 ai = strategy.prepare(
                     snapshot,
                     clock(),
                     budget=engine.ai_budget(snapshot, markets),
                     max_age_seconds=engine.config.risk.max_data_age_seconds,
+                    require_uptrend=ai_direction_filter,
                 )
                 outcome = "NOT_ACTIONABLE"
                 if ai.result.proposal.action in (Action.BUY, Action.SELL):

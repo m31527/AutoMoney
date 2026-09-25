@@ -12,10 +12,12 @@ case "${2:-btc-eth}" in
 esac
 dc() { docker compose -p "$project" --env-file config/ollama.env -f compose.yaml -f compose.ai.yaml "${extra[@]}" -f compose.ai-prefilter.yaml "$@"; }
 export AI_PREFILTER_ENABLED=true
+export AI_DIRECTION_FILTER_ENABLED=false
 case "${1:-help}" in
+  direction) export AI_DIRECTION_FILTER_ENABLED=true; dc up --build -d --no-deps ai-trader dashboard ;;
   start) dc up --build -d --no-deps ai-trader dashboard ;;
   disable) export AI_PREFILTER_ENABLED=false; dc up --build -d --no-deps ai-trader dashboard ;;
   status) dc ps ;;
   logs) dc logs --tail 40 ai-trader ;;
-  *) echo '用法：bash scripts/ai-prefilter.sh {start|disable|status|logs} {btc-eth|sol-xrp}' ;;
+  *) echo '用法：bash scripts/ai-prefilter.sh {direction|start|disable|status|logs} {btc-eth|sol-xrp}' ;;
 esac

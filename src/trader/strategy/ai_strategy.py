@@ -14,9 +14,19 @@ from trader.storage.transaction import transaction
 from trader.strategy.baseline import HoldStrategy, SMAStrategy, StrategyAudit, StrategyResult
 from trader.strategy.budget import TradeBudget
 from trader.strategy.contract import InvalidProposal, parse_proposal
+from trader.strategy.prefilter import hourly_direction
 from trader.strategy.provider import AIProvider, ProviderError
 
 POLICY_VERSION = "ai-budget-freshness-v2"
+DIRECTION_POLICY_VERSION = "ai-entry-direction-v3"
+DIRECTION_INSTRUCTIONS = """
+Entry experiment: BUY requires entry_direction.state == UP, derived from closed 1h SMA(5/20).
+A positive absolute edge proxy does not indicate bullish direction or predict profit.
+If entry direction is DOWN, FLAT or UNAVAILABLE, do not BUY. SELL of existing inventory
+is still permitted subject to the unchanged budget and risk checks. UP is necessary, not
+sufficient: use the observations to decide whether to BUY or HOLD. Never inflate confidence
+just to pass a threshold. The entry direction policy cannot be modified by model output.
+"""
 MAX_PRICE_DRIFT_BPS = Decimal("10")
 
 INSTRUCTIONS = """Propose a SPOT trade for the supplied snapshot symbol.
@@ -38,7 +48,9 @@ The deterministic edge proxy is not a calibrated forecast. You cannot set that p
 """
 
 
-def build_context(snapshot: MarketSnapshot, now: datetime, budget: TradeBudget) -> str:
+def build_context(
+    snapshot: MarketSnapshot, now: datetime, budget: TradeBudget, *, require_uptrend: bool = False
+) -> str:
     def closed_candles(candles: tuple[Candle, ...], minutes: int) -> tuple[Candle, ...]:
         return tuple(c for c in candles if c.timestamp + timedelta(minutes=minutes) <= now)[-60:]
 
@@ -56,8 +68,16 @@ def build_context(snapshot: MarketSnapshot, now: datetime, budget: TradeBudget) 
             "evaluated_at": now,
             "deterministic_edge_proxy_bps": baseline.expected_edge_bps,
             "scope": "PAPER_SIMULATED_ACCOUNT",
-            "policy_version": POLICY_VERSION,
+            "policy_version": DIRECTION_POLICY_VERSION if require_uptrend else POLICY_VERSION,
             "trade_budget": asdict(budget),
+            **(
+                {
+                    "entry_direction": hourly_direction(snapshot, now),
+                    "entry_rule": "BUY_REQUIRES_HOURLY_UP",
+                }
+                if require_uptrend
+                else {}
+            ),
         }
     )
 
@@ -137,14 +157,18 @@ class AIStrategy:
         *,
         budget: TradeBudget,
         max_age_seconds: int = 60,
+        require_uptrend: bool = False,
     ) -> PreparedAI:
         if self.connection.in_transaction:
             raise ValueError("AI calls must run outside database transactions")
-        context = build_context(snapshot, now, budget)
+        context = build_context(snapshot, now, budget, require_uptrend=require_uptrend)
+        instructions = INSTRUCTIONS + DIRECTION_INSTRUCTIONS if require_uptrend else INSTRUCTIONS
+        policy = DIRECTION_POLICY_VERSION if require_uptrend else POLICY_VERSION
+        direction = hourly_direction(snapshot, now) if require_uptrend else None
         raw, error = "", None
         started = time.monotonic()
         try:
-            raw = self.provider.complete(INSTRUCTIONS, context)
+            raw = self.provider.complete(instructions, context)
             proposal = parse_proposal(raw, snapshot.symbol)
         except (ProviderError, InvalidProposal) as failure:
             error = str(failure)
@@ -158,9 +182,17 @@ class AIStrategy:
             else Decimal(0)
         )
         oversized = proposal.requested_notional_usd > limit
+        direction_blocked = bool(
+            require_uptrend
+            and proposal.action == Action.BUY
+            and direction
+            and direction["state"] != "UP"
+        )
         diagnostics = {
-            "policy_version": POLICY_VERSION,
-            "instructions_sha256": hashlib.sha256(INSTRUCTIONS.encode()).hexdigest(),
+            "policy_version": policy,
+            "entry_direction": direction,
+            "entry_direction_blocked": direction_blocked,
+            "instructions_sha256": hashlib.sha256(instructions.encode()).hexdigest(),
             "inference_seconds": duration,
             "initial_market_age_seconds": (now - snapshot.timestamp).total_seconds(),
             "budget": asdict(budget),
@@ -170,6 +202,13 @@ class AIStrategy:
             "budget_exceeded": oversized,
             "quote_recheck": "NOT_RUN",
         }
+        if direction_blocked:
+            proposal = replace(
+                proposal,
+                action=Action.HOLD,
+                requested_notional_usd=Decimal(0),
+                reason="AI_ENTRY_DIRECTION_BLOCKED",
+            )
         if oversized:
             proposal = replace(
                 proposal,
@@ -188,7 +227,7 @@ class AIStrategy:
                     self.provider.name,
                     self.provider.model,
                     self.provider.redact(
-                        encode({"instructions": INSTRUCTIONS, "context": context})
+                        encode({"instructions": instructions, "context": context})
                     ),
                     safe_raw,
                     error,
@@ -212,7 +251,7 @@ class AIStrategy:
         return PreparedAI(
             snapshot,
             StrategyResult(proposal, edge, audit),
-            self.name + ":" + POLICY_VERSION,
+            self.name + ":" + policy,
             snapshot.timestamp,
             max_age_seconds,
         )

@@ -6,6 +6,8 @@
 
 降低空倉期間模型呼叫：[空倉成本預篩實驗更新](AI_PREFILTER_UPDATE.md)。
 
+研究買入方向與後續價格：[進場方向實驗更新](ENTRY_DIRECTION_UPDATE.md)。
+
 ## 搬機、自訂 Ollama URL 與匯出
 
 請看 [簡易安裝說明](OLLAMA_START.md)：填入 `config/ollama.env` 的 URL 與模型名稱，執行 `bash scripts/ai.sh start`，同時啟動原本規則組與 Ollama 模擬組。網頁右上角「匯出分析資料」可下載 ZIP，供後續比較。

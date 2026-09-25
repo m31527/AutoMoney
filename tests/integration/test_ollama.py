@@ -217,3 +217,22 @@ class OllamaWorkerTests(unittest.TestCase):
             self.assertRaises(ValueError),
         ):
             self.run_worker()
+
+    def test_direction_mode_is_visible_and_requires_prefilter(self):
+        with (
+            patch.dict(
+                "os.environ",
+                {"AI_PREFILTER_ENABLED": "true", "AI_DIRECTION_FILTER_ENABLED": "true"},
+            ),
+            patch.object(OllamaProvider, "complete", return_value=proposal()),
+        ):
+            self.run_worker()
+        self.assertTrue(ai_summary(self.root)["direction_filter_enabled"])
+        with (
+            patch.dict(
+                "os.environ",
+                {"AI_PREFILTER_ENABLED": "false", "AI_DIRECTION_FILTER_ENABLED": "true"},
+            ),
+            self.assertRaises(ValueError),
+        ):
+            self.run_worker()
