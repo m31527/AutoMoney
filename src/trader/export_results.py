@@ -14,6 +14,7 @@ from typing import Any, BinaryIO
 
 from trader.dashboard import reader
 from trader.direction_study import study
+from trader.entry_research import research
 from trader.replay_exits import LIMITATION, replay_book
 from trader.storage.repository import encode
 
@@ -256,9 +257,15 @@ def write_export(
                     if e["event_type"] == "AI_PREFILTER_EVALUATED"
                 ]
             )
+            entry = research([
+                e for e in selected.get(name + "/events.jsonl", [])
+                if e["event_type"] == "AI_PREFILTER_EVALUATED"
+            ])
+            archive.writestr(name + "/entry_research.json", encode(entry))
             skipped = sum(e["skipped"] for e in prefilters)
             analysis["activity"][name] = {
                 "direction_study": directional_study,
+                "entry_research": {k: v for k, v in entry.items() if k != "samples"},
                 "ai_prefilter": {
                     "evaluations": len(prefilters),
                     "skipped_model_calls": skipped,
@@ -336,9 +343,42 @@ def write_export(
         analysis["exit_replay_scope"] = LIMITATION
         archive.writestr("exit_policy_replay.json", encode(exit_replay))
         archive.writestr("summary.json", encode(analysis))
+        research_lines = [
+            "# 進場研究（非交易回測）",
+            "包含成本未通過的空倉、新鮮行情候選；單位 bps，100 bps = 1%。",
+            "差額僅扣一次當時預估來回成本，不能當成成交損益或勝率。",
+        ]
+        for name, activity in analysis["activity"].items():
+            entry_summary = activity["entry_research"]
+            if not entry_summary["observations"]:
+                continue
+            research_lines.extend([
+                f"\n## {name}：{entry_summary['observations']} 筆候選",
+                entry_summary["limitations"],
+                "\n|分組|值|跨度|已配對/候選|平均價格變化 bps|平均扣成本差額 bps|",
+                "|---|---|---|---|---|---|",
+            ])
+            for group in entry_summary["groups"]:
+                if group["dimension"] not in (
+                    "all", "symbol_direction", "strength_5m", "strength_1h"
+                ):
+                    continue
+                for horizon, stats in group["forward"].items():
+                    raw = stats["mean_price_return_bps"]
+                    net = stats["mean_after_estimated_cost_bps"]
+                    raw_text = f"{Decimal(raw):.3f}" if raw is not None else "無資料"
+                    net_text = f"{Decimal(net):.3f}" if net is not None else "無資料"
+                    research_lines.append(
+                        f"|{group['dimension']}|{group['value']}|{horizon}|"
+                        f"{stats['matched']}/{group['observations']}|{raw_text}|{net_text}|"
+                    )
+        archive.writestr("ENTRY_RESEARCH.md", "\n".join(research_lines))
         lines = [
             "# 區間分析摘要",
             "先讀 summary.json；詳細查核再讀各組 JSONL。",
+            "entry_research 包含所有空倉且行情新鮮的候選，含成本未通過者；",
+            "按幣種、方向、5m/1h強度分組，逐筆查核見各帳本 entry_research.json。",
+            "after_estimated_cost_bps 是價格變化減預估成本，不是實際交易損益。",
             "損益使用區間內首末實際估值，時間可能與所選邊界不同；不補造價格。",
             "費用已包含於淨值，不可重複扣除；尚未扣未來退出成本。",
             "",

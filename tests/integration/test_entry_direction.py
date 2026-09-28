@@ -110,6 +110,9 @@ class EntryDirectionTests(unittest.TestCase):
         write_export(root, out)
         with zipfile.ZipFile(out) as z:
             result = json.loads(z.read("summary.json"))["activity"]["legacy"]["direction_study"]
+            self.assertIn("ENTRY_RESEARCH.md", z.namelist())
+            entry = json.loads(z.read("legacy/entry_research.json"))
+            self.assertEqual(entry["observations"], 1)
             self.assertEqual(result["extra_direction_skips"], 1)
             self.assertEqual(result["cohorts"]["DOWN"]["forward_prices"]["1h"]["matched"], 0)
 
