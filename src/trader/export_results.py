@@ -16,6 +16,7 @@ from trader.dashboard import reader
 from trader.direction_study import study
 from trader.entry_research import research
 from trader.replay_exits import LIMITATION, replay_book
+from trader.shadow import summarize
 from trader.storage.repository import encode
 
 BOOKS = {
@@ -264,6 +265,7 @@ def write_export(
             archive.writestr(name + "/entry_research.json", encode(entry))
             skipped = sum(e["skipped"] for e in prefilters)
             analysis["activity"][name] = {
+                "shadow_ai": summarize(selected.get(name + "/events.jsonl", [])),
                 "direction_study": directional_study,
                 "entry_research": {k: v for k, v in entry.items() if k != "samples"},
                 "ai_prefilter": {
@@ -376,6 +378,7 @@ def write_export(
         lines = [
             "# 區間分析摘要",
             "先讀 summary.json；詳細查核再讀各組 JSONL。",
+            "影子AI見 activity.ollama.shadow_ai，獨立於正式ai_calls；不送單。",
             "entry_research 包含所有空倉且行情新鮮的候選，含成本未通過者；",
             "按幣種、方向、5m/1h強度分組，逐筆查核見各帳本 entry_research.json。",
             "after_estimated_cost_bps 是價格變化減預估成本，不是實際交易損益。",

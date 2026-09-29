@@ -1,0 +1,7 @@
+# Optional shadow observations: never sent to PaperEngine or exchange execution.
+services:
+  ai-trader:
+    environment:
+      AI_PREFILTER_ENABLED: "true"
+      AI_DIRECTION_FILTER_ENABLED: "true"
+      AI_SHADOW_INTERVAL_SECONDS: ${AI_SHADOW_INTERVAL_SECONDS:-1800}

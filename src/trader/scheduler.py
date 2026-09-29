@@ -12,6 +12,7 @@ from trader.exchange.errors import ExchangeError
 from trader.execution.paper import PaperEngine
 from trader.market.data import collect_market
 from trader.models import Action
+from trader.shadow import observe
 from trader.storage.repository import encode, json_default
 from trader.storage.transaction import transaction
 from trader.strategy.ai_strategy import AIStrategy
@@ -28,6 +29,7 @@ def run_paper(
     cycles: int = 1,
     ai_prefilter: bool = False,
     ai_direction_filter: bool = False,
+    ai_shadow_interval: int = 0,
     emit: Callable[[dict[str, Any]], None],
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -101,6 +103,22 @@ def run_paper(
         emit(
             engine.step(symbol, markets, prepared, cycle_id=cycle_id, now=clock(), average=average)
         )
+        if (
+            ai_shadow_interval
+            and isinstance(strategy, AIStrategy)
+            and ai_prefilter
+            and skip
+            and not engine.risk.kill_switch.active
+        ):
+            observe(
+                engine.connection,
+                strategy.provider,
+                snapshot,
+                engine.ai_budget(snapshot, markets),
+                evaluation,
+                clock=clock,
+                interval_seconds=ai_shadow_interval,
+            )
         completed += 1
         if cycles == 0 or completed < cycles:
             sleep(300)
