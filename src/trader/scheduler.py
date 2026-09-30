@@ -30,6 +30,7 @@ def run_paper(
     ai_prefilter: bool = False,
     ai_direction_filter: bool = False,
     ai_shadow_interval: int = 0,
+    ai_shadow_paired: bool = False,
     emit: Callable[[dict[str, Any]], None],
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -118,6 +119,8 @@ def run_paper(
                 evaluation,
                 clock=clock,
                 interval_seconds=ai_shadow_interval,
+                paired=ai_shadow_paired,
+                paused=lambda: engine.risk.kill_switch.active,
             )
         completed += 1
         if cycles == 0 or completed < cycles:

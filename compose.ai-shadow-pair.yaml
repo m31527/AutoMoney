@@ -1,0 +1,8 @@
+# Two sequential calls per hour; same hourly shadow-call cap as the original single-call mode.
+services:
+  ai-trader:
+    environment:
+      AI_PREFILTER_ENABLED: "true"
+      AI_DIRECTION_FILTER_ENABLED: "true"
+      AI_SHADOW_INTERVAL_SECONDS: "3600"
+      AI_SHADOW_PAIRED: "true"

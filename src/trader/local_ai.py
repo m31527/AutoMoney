@@ -82,9 +82,14 @@ def run_local_ai(
         raise ValueError("AI_DIRECTION_FILTER_ENABLED must be true or false")
     if direction == "true" and flag != "true":
         raise ValueError("Direction filter requires AI prefilter")
+    shadow_paired = os.environ.get("AI_SHADOW_PAIRED", "false")
+    if shadow_paired not in ("true", "false"):
+        raise ValueError("AI_SHADOW_PAIRED must be true or false")
     shadow_interval = int(os.environ.get("AI_SHADOW_INTERVAL_SECONDS", "0"))
     if shadow_interval and shadow_interval < 900:
         raise ValueError("AI_SHADOW_INTERVAL_SECONDS must be 0 or at least 900")
+    if shadow_paired == "true" and shadow_interval and shadow_interval < 3600:
+        raise ValueError("Paired shadow requires at least 3600 seconds")
     root = config.database_path.parent / "ollama"
     root.mkdir(parents=True, exist_ok=True)
     with (root / "worker.lock").open("a") as lock:
@@ -142,6 +147,7 @@ def run_local_ai(
                                     cycles=1,
                                     ai_prefilter=flag == "true",
                                     ai_shadow_interval=shadow_interval,
+                                    ai_shadow_paired=shadow_paired == "true",
                                     ai_direction_filter=direction == "true",
                                     emit=emit,
                                     clock=clock,
