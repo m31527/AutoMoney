@@ -18,6 +18,7 @@ from trader.storage.transaction import transaction
 from trader.strategy.ai_strategy import AIStrategy
 from trader.strategy.baseline import Strategy
 from trader.strategy.prefilter import PrefilterHold, evaluate
+from trader.strategy.provider import AIProvider
 
 
 def run_paper(
@@ -31,6 +32,7 @@ def run_paper(
     ai_direction_filter: bool = False,
     ai_shadow_interval: int = 0,
     ai_shadow_paired: bool = False,
+    shadow_provider: AIProvider | None = None,
     emit: Callable[[dict[str, Any]], None],
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -113,7 +115,7 @@ def run_paper(
         ):
             observe(
                 engine.connection,
-                strategy.provider,
+                shadow_provider or strategy.provider,
                 snapshot,
                 engine.ai_budget(snapshot, markets),
                 evaluation,

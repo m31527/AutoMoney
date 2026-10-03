@@ -17,3 +17,5 @@ data/*
 
 config/ollama.env
 artifacts/
+
+config/openteddy.env

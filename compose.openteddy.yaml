@@ -1,0 +1,9 @@
+# Research only: no effect on the normal Ollama PAPER account or risk limits.
+services:
+  ai-trader:
+    # DGX/Linux: reach native OpenTeddy without exposing its other APIs to the LAN.
+    network_mode: host
+    env_file:
+      - config/openteddy.env
+    environment:
+      AI_SHADOW_PROVIDER: openteddy

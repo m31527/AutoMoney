@@ -128,6 +128,7 @@ def observe(
             "variant": variant,
             "snapshot_context_sha256": hashlib.sha256(context.encode()).hexdigest(),
             "model": provider.model,
+            "provider": provider.name,
             "symbol": snapshot.symbol,
             "started_at": now,
             "reference_price": snapshot.last_price,
@@ -148,6 +149,9 @@ def observe(
             result["proposal"]["reason"] = provider.redact(proposal.reason)
         except (ProviderError, InvalidProposal) as error:
             result.update(status="ERROR", error=str(error))
+        metadata = getattr(provider, "last_metadata", None)
+        if isinstance(metadata, dict):
+            result["provider_metadata"] = metadata.copy()
         result["inference_seconds"] = time.monotonic() - started
         result["completed_at"] = clock()
         with transaction(connection):
@@ -244,6 +248,23 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
             },
             "note": "Paired same snapshot, alternating execution order. Both use a common "
             "post-pair quote anchor. Incomplete/error pairs are not valid comparisons.",
+        },
+        "by_provider_model": {
+            identity: {
+                "completed": len(group),
+                "failed": sum(r["status"] == "ERROR" for r in group),
+                "actions": dict(Counter(r["proposal"]["action"] for r in group if "proposal" in r)),
+            }
+            for identity in sorted(
+                {f"{r.get('provider', 'legacy')}:{r.get('model', 'unknown')}" for r in results}
+            )
+            for group in [
+                [
+                    r
+                    for r in results
+                    if f"{r.get('provider', 'legacy')}:{r.get('model', 'unknown')}" == identity
+                ]
+            ]
         },
         "started": len(starts),
         "completed": len(results),

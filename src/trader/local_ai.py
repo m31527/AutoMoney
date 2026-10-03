@@ -90,6 +90,13 @@ def run_local_ai(
         raise ValueError("AI_SHADOW_INTERVAL_SECONDS must be 0 or at least 900")
     if shadow_paired == "true" and shadow_interval and shadow_interval < 3600:
         raise ValueError("Paired shadow requires at least 3600 seconds")
+    shadow_provider = None
+    if os.environ.get("AI_SHADOW_PROVIDER", "ollama") == "openteddy":
+        from trader.strategy.openteddy import OpenTeddyProvider
+
+        shadow_provider = OpenTeddyProvider()
+    elif os.environ.get("AI_SHADOW_PROVIDER", "ollama") != "ollama":
+        raise ValueError("Unsupported AI_SHADOW_PROVIDER")
     root = config.database_path.parent / "ollama"
     root.mkdir(parents=True, exist_ok=True)
     with (root / "worker.lock").open("a") as lock:
@@ -147,6 +154,7 @@ def run_local_ai(
                                     cycles=1,
                                     ai_prefilter=flag == "true",
                                     ai_shadow_interval=shadow_interval,
+                                    shadow_provider=shadow_provider,
                                     ai_shadow_paired=shadow_paired == "true",
                                     ai_direction_filter=direction == "true",
                                     emit=emit,
