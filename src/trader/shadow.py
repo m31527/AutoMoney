@@ -20,6 +20,7 @@ from trader.strategy.budget import TradeBudget
 from trader.strategy.contract import InvalidProposal, parse_proposal
 from trader.strategy.prefilter import hourly_direction
 from trader.strategy.provider import AIProvider, ProviderError
+from trader.strategy.research import VERSION, compact_context, research_prompt
 
 INSTRUCTIONS_SHADOW = (
     INSTRUCTIONS
@@ -115,15 +116,26 @@ def observe(
                     ),
                 ),
             )
-    context = build_context(snapshot, now, budget)
+    compact = provider.name == "openteddy"
+    context = (
+        compact_context(snapshot, now, budget, evaluation)
+        if compact
+        else build_context(snapshot, now, budget)
+    )
     for variant, call_id in reservations:
         if paused():
             break
-        instructions, variant_context = prompt_variant(context, variant)
+        instructions, variant_context = (
+            research_prompt(context, variant, call_id)
+            if compact
+            else prompt_variant(context, variant)
+        )
         started = time.monotonic()
         result: dict[str, Any] = {
             "call_id": call_id,
-            "policy_version": "shadow-prompt-pair-v2" if paired else "shadow-entry-v1",
+            "policy_version": VERSION
+            if compact
+            else ("shadow-prompt-pair-v2" if paired else "shadow-entry-v1"),
             "pair_id": pair_id,
             "variant": variant,
             "snapshot_context_sha256": hashlib.sha256(context.encode()).hexdigest(),
@@ -142,6 +154,9 @@ def observe(
             "status": "OK",
             "executable": False,
         }
+        if compact:
+            result["research_input"] = json.loads(variant_context)
+            result["input_bytes"] = len((instructions + variant_context).encode())
         try:
             raw = provider.complete(instructions, variant_context)
             proposal = parse_proposal(raw, snapshot.symbol)
@@ -226,6 +241,31 @@ def summarize(events: list[dict[str, Any]]) -> dict[str, Any]:
             result["post_response_forward"][f"{hours}h"] = match
     finished = {r["call_id"] for r in results}
     return {
+        "research_quality": {
+            "policy_versions": dict(
+                Counter(r["policy_version"] for r in results if "policy_version" in r)
+            ),
+            "verified_input_receipts": sum(
+                r.get("provider_metadata", {}).get("input_audit", {}).get("receipt_verified")
+                is True
+                for r in results
+            ),
+            "error_codes": dict(
+                Counter(
+                    r.get("provider_metadata", {}).get("error_code", r.get("error", "UNKNOWN"))
+                    for r in results
+                    if r["status"] == "ERROR"
+                )
+            ),
+            "identical_proposal_pairs": sum(
+                len(v) == 2
+                and all(r["status"] == "OK" for r in v)
+                and v[0]["proposal"] == v[1]["proposal"]
+                for v in pairs.values()
+            ),
+            "note": "Receipt verifies echoed fields, not reasoning. Identical answers are not "
+            "proof of truncation. research_input contains only data known at decision time.",
+        },
         "prompt_comparison": {
             "complete_pairs": sum(
                 len(v) == 2 and all(r["status"] == "OK" for r in v) for v in pairs.values()

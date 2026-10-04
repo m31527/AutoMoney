@@ -113,6 +113,23 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(Upstream.calls, 1)
 
 
+    def test_compact_receipt_and_budget_validation(self):
+        receipt = dict(marker='abc', can_buy=True, can_sell=False,
+                       max_buy_notional_usd='100', horizon_minutes=240)
+        self.payload['context'] = json.dumps(dict(research_version='compact-entry-v3',
+            snapshot={'symbol': 'BTCUSDT'}, input_receipt=receipt,
+            max_buy_notional_usd='100', max_sell_notional_usd='0'))
+        with patch.dict(os.environ, AUTOMONEY_DAILY_CALL_LIMIT='10'), \
+             patch.object(api.httpx, 'AsyncClient', Upstream), \
+             patch.dict(PROPOSAL, research_check=receipt, time_horizon_minutes=240):
+            self.assertTrue(self.post().json()['input_audit']['receipt_verified'])
+            with patch.dict(PROPOSAL, research_check={**receipt, 'can_buy': False}):
+                self.assertEqual(self.post().json()['detail'], 'INPUT_RECEIPT_MISMATCH')
+            with patch.dict(PROPOSAL, time_horizon_minutes=15):
+                self.assertEqual(self.post().json()['detail'], 'RESEARCH_HORIZON_MISMATCH')
+            with patch.dict(PROPOSAL, action='BUY', requested_notional_usd=101):
+                self.assertEqual(self.post().json()['detail'], 'RESEARCH_BUDGET_EXCEEDED')
+
     def test_input_limit(self):
         self.payload['context'] = 'x'*160001
         self.assertEqual(self.post().status_code, 413)

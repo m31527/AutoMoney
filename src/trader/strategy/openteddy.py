@@ -1,5 +1,6 @@
 """Authenticated, bounded OpenTeddy shadow research client; never executes orders."""
 
+import hashlib
 import http.client
 import json
 import os
@@ -59,6 +60,17 @@ class OpenTeddyProvider:
             self.last_metadata.update(
                 {k: data[k] for k in ("model", "request_id", "usage", "latency_seconds")}
             )
+            if json.loads(context).get("research_version") == "compact-entry-v3":
+                audit = data.get("input_audit", {})
+                if (
+                    audit.get("receipt_verified") is not True
+                    or audit.get("instructions_sha256")
+                    != hashlib.sha256(instructions.encode()).hexdigest()
+                    or audit.get("context_sha256") != hashlib.sha256(context.encode()).hexdigest()
+                ):
+                    self.last_metadata["error_code"] = "INPUT_AUDIT_FAILED"
+                    raise ProviderError()
+                self.last_metadata["input_audit"] = audit
             return json.dumps(data["proposal"])
         except urllib.error.HTTPError as error:
             self.last_metadata["error_code"] = f"HTTP_{error.code}"
@@ -69,6 +81,9 @@ class OpenTeddyProvider:
                     "UPSTREAM_TIMEOUT",
                     "UPSTREAM_NETWORK_ERROR",
                     "INVALID_PROPOSAL",
+                    "INPUT_RECEIPT_MISMATCH",
+                    "RESEARCH_HORIZON_MISMATCH",
+                    "RESEARCH_BUDGET_EXCEEDED",
                     "DAILY_CALL_LIMIT",
                     "BUSY",
                     "MODEL_NOT_ALLOWED",

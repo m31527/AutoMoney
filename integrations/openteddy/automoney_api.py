@@ -1,5 +1,8 @@
 """Optional isolated AutoMoney research router. No agents, tools, fallback or retries."""
 import asyncio
+import copy
+import hashlib
+from decimal import Decimal
 import hmac
 import json
 import os
@@ -35,7 +38,7 @@ def authorize(request):
 @router.get("/health")
 async def health(request: Request):
     authorize(request)
-    return {"status": "ok", "version": 1, "cloud_enabled":
+    return {"status": "ok", "version": 2, "cloud_enabled":
             os.environ.get("AUTOMONEY_ALLOW_OPENAI") == "true"}
 
 
@@ -56,6 +59,9 @@ async def analyze(request: Request):
         if not 1 <= len(data["instructions"]) <= 12000 or not 1 <= len(data["context"]) <= 120000:
             raise ValueError()
         context = json.loads(data["context"])
+        compact = context.get("research_version") == "compact-entry-v3"
+        if compact and len((data["instructions"] + data["context"]).encode()) > 10000:
+            raise ValueError()
         symbol = context["snapshot"]["symbol"]
         if symbol not in PROPOSAL_SCHEMA["properties"]["symbol"]["enum"]:
             raise ValueError()
@@ -83,13 +89,23 @@ async def analyze(request: Request):
                 raise HTTPException(429, "DAILY_CALL_LIMIT")
             db.execute("INSERT INTO calls VALUES (?)", (time.time(),))
         # Durable rolling 24-hour attempt quota; failed calls also consume a slot.
+        schema = copy.deepcopy(PROPOSAL_SCHEMA)
+        if compact:
+            schema["required"].append("research_check")
+            receipt = context["input_receipt"]
+            schema["properties"]["research_check"] = {
+                "type": "object", "additionalProperties": False,
+                "required": list(receipt), "properties": {
+                    key: {"type": "boolean" if isinstance(value, bool) else
+                          "integer" if isinstance(value, int) else "string"}
+                    for key, value in receipt.items()}}
         messages = [{"role": "system", "content": data["instructions"]},
                     {"role": "user", "content": data["context"]}]
         if backend == "ollama":
             url = config.qwen_base_url.rstrip("/") + "/api/chat"
             headers = {}
             payload = {"model": model, "messages": messages, "stream": False, "think": False,
-                       "format": PROPOSAL_SCHEMA, "keep_alive": "5m",
+                       "format": schema, "keep_alive": "5m",
                        "options": {"num_ctx": 16384, "num_predict": 2048, "temperature": 0}}
         else:
             if not config.openai_api_key:
@@ -124,8 +140,27 @@ async def analyze(request: Request):
                 usage = result.get("usage", {})
             if message.get("tool_calls") or message.get("refusal"):
                 raise ValueError()
-            parse_proposal(message["content"], symbol)
-            return {"proposal": json.loads(message["content"]), "provider": backend,
+            from automoney_contract import _object
+            proposal = json.loads(message["content"], object_pairs_hook=_object)
+            if compact:
+                check = proposal.pop("research_check", None)
+                if (not isinstance(check, dict) or set(check) != set(receipt)
+                        or any(type(check[k]) is not type(v) or check[k] != v
+                               for k, v in receipt.items())):
+                    raise HTTPException(502, "INPUT_RECEIPT_MISMATCH")
+                if proposal.get("time_horizon_minutes") != 240:
+                    raise HTTPException(502, "RESEARCH_HORIZON_MISMATCH")
+            parsed = parse_proposal(json.dumps(proposal), symbol)
+            if compact:
+                cap = context["max_buy_notional_usd"] if parsed.action == "BUY" else context["max_sell_notional_usd"]
+                if parsed.action != "HOLD" and parsed.requested_notional_usd > Decimal(cap):
+                    raise HTTPException(502, "RESEARCH_BUDGET_EXCEEDED")
+            return {"proposal": proposal,
+                    "input_audit": {"version": 2, "receipt_verified": compact,
+                        "instructions_sha256": hashlib.sha256(data["instructions"].encode()).hexdigest(),
+                        "context_sha256": hashlib.sha256(data["context"].encode()).hexdigest(),
+                        "input_bytes": len((data["instructions"] + data["context"]).encode()),
+                        "requested_num_ctx": 16384 if backend == "ollama" else None}, "provider": backend,
                     "requested_model": model, "model": result.get("model", model),
                     "usage": usage, "request_id": str(uuid.uuid4()),
                     "latency_seconds": round(time.monotonic() - now, 3)}
