@@ -41,7 +41,7 @@ class ResearchTests(unittest.TestCase):
         future = replace(snapshot.candles_1h[-1], timestamp=NOW + timedelta(hours=1))
         snapshot = replace(snapshot, candles_1h=snapshot.candles_1h + (future,))
         budget = trade_budget(snapshot, RiskConfig(), Decimal(0))
-        base = compact_context(snapshot, NOW, budget, {})
+        base = compact_context(snapshot, NOW, budget, {"estimated_round_trip_cost_bps": "40"})
         instructions, raw = research_prompt(base, "control", "unique-call")
         data = json.loads(raw)
         self.assertNotIn(future.timestamp.isoformat(), raw)
@@ -53,8 +53,12 @@ class ResearchTests(unittest.TestCase):
     def test_variants_keep_identical_market(self):
         snapshot = snapshot_fixture()
         budget = trade_budget(snapshot, RiskConfig(), Decimal(0))
-        base = compact_context(snapshot, NOW, budget, {"signal_proxy_bps": "10"})
+        base = compact_context(
+            snapshot, NOW, budget, {"signal_proxy_bps": "10", "estimated_round_trip_cost_bps": "40"}
+        )
         a = json.loads(research_prompt(base, "control", "same")[1])
         b = json.loads(research_prompt(base, "unanchored", "same")[1])
-        self.assertEqual(a.pop("deterministic_edge_proxy_bps"), "10")
+        self.assertNotIn("deterministic_edge_proxy_bps", a)
+        self.assertEqual(a["cost_reference"]["round_trip_cost_pct"], "0.4")
+        self.assertEqual(a["cost_reference"]["approximate_break_even_price"], "50200.000")
         self.assertEqual(a, b)

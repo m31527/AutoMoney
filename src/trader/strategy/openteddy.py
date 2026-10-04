@@ -60,7 +60,10 @@ class OpenTeddyProvider:
             self.last_metadata.update(
                 {k: data[k] for k in ("model", "request_id", "usage", "latency_seconds")}
             )
-            if json.loads(context).get("research_version") == "compact-entry-v3":
+            if json.loads(context).get("research_version") in (
+                "compact-entry-v3",
+                "compact-entry-v4",
+            ):
                 audit = data.get("input_audit", {})
                 if (
                     audit.get("receipt_verified") is not True

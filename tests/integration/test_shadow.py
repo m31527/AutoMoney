@@ -30,6 +30,7 @@ class ShadowTests(unittest.TestCase):
                     "skipped": True,
                     "policy_version": "test",
                     "reason": "COST",
+                    "estimated_round_trip_cost_bps": "40",
                 },
             ),
         ):

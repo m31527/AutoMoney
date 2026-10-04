@@ -38,7 +38,7 @@ def authorize(request):
 @router.get("/health")
 async def health(request: Request):
     authorize(request)
-    return {"status": "ok", "version": 2, "cloud_enabled":
+    return {"status": "ok", "version": 3, "cloud_enabled":
             os.environ.get("AUTOMONEY_ALLOW_OPENAI") == "true"}
 
 
@@ -59,7 +59,7 @@ async def analyze(request: Request):
         if not 1 <= len(data["instructions"]) <= 12000 or not 1 <= len(data["context"]) <= 120000:
             raise ValueError()
         context = json.loads(data["context"])
-        compact = context.get("research_version") == "compact-entry-v3"
+        compact = context.get("research_version") in ("compact-entry-v3", "compact-entry-v4")
         if compact and len((data["instructions"] + data["context"]).encode()) > 10000:
             raise ValueError()
         symbol = context["snapshot"]["symbol"]
@@ -156,7 +156,7 @@ async def analyze(request: Request):
                 if parsed.action != "HOLD" and parsed.requested_notional_usd > Decimal(cap):
                     raise HTTPException(502, "RESEARCH_BUDGET_EXCEEDED")
             return {"proposal": proposal,
-                    "input_audit": {"version": 2, "receipt_verified": compact,
+                    "input_audit": {"version": 3, "receipt_verified": compact,
                         "instructions_sha256": hashlib.sha256(data["instructions"].encode()).hexdigest(),
                         "context_sha256": hashlib.sha256(data["context"].encode()).hexdigest(),
                         "input_bytes": len((data["instructions"] + data["context"]).encode()),

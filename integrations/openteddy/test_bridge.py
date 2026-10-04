@@ -115,8 +115,9 @@ class BridgeTests(unittest.TestCase):
 
     def test_compact_receipt_and_budget_validation(self):
         receipt = dict(marker='abc', can_buy=True, can_sell=False,
-                       max_buy_notional_usd='100', horizon_minutes=240)
-        self.payload['context'] = json.dumps(dict(research_version='compact-entry-v3',
+                       max_buy_notional_usd='100', horizon_minutes=240,
+                       round_trip_cost_pct='0.4', future_exit_allowed_subject_to_checks=True)
+        self.payload['context'] = json.dumps(dict(research_version='compact-entry-v4',
             snapshot={'symbol': 'BTCUSDT'}, input_receipt=receipt,
             max_buy_notional_usd='100', max_sell_notional_usd='0'))
         with patch.dict(os.environ, AUTOMONEY_DAILY_CALL_LIMIT='10'), \

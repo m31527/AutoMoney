@@ -9,7 +9,7 @@ esac
 compose=(docker compose -p "$project" --env-file config/ollama.env
   -f compose.yaml -f compose.ai.yaml "${extra[@]}" -f compose.ai-shadow-pair.yaml
   -f compose.openteddy.yaml)
-"${compose[@]}" build ai-trader
+"${compose[@]}" build ai-trader dashboard
 # Verify from Docker, without invoking any model or paying for tokens.
 "${compose[@]}" run --rm --no-deps --entrypoint python ai-trader -c '
 import json, os, urllib.request
@@ -19,7 +19,7 @@ from trader.exchange.transport import NoRedirect
 opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
 with opener.open(r, timeout=10) as response:
     health = json.loads(response.read(4096))
-    if health.get("version", 0) < 2:
+    if health.get("version", 0) < 3:
         raise SystemExit("請先安裝新版 OpenTeddy bridge 並重啟 OpenTeddy")
     print(health)
 '

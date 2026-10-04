@@ -7,3 +7,6 @@ services:
       - config/openteddy.env
     environment:
       AI_SHADOW_PROVIDER: openteddy
+      # One unanchored v4 observation every 30 minutes: same maximum calls per day.
+      AI_SHADOW_PAIRED: "false"
+      AI_SHADOW_INTERVAL_SECONDS: "1800"
