@@ -131,6 +131,20 @@ class BridgeTests(unittest.TestCase):
             with patch.dict(PROPOSAL, action='BUY', requested_notional_usd=101):
                 self.assertEqual(self.post().json()['detail'], 'RESEARCH_BUDGET_EXCEEDED')
 
+    def test_replay_opt_in_pin_and_separate_quota(self):
+        response = self.client.post('/automoney/replay', headers=self.headers, json=self.payload)
+        self.assertEqual(response.status_code, 403)
+        with patch.dict(os.environ, AUTOMONEY_REPLAY_ENABLED='true',
+                        AUTOMONEY_REPLAY_DAILY_CALL_LIMIT='1', AUTOMONEY_MODEL='test:1'), \
+             patch.object(api.httpx, 'AsyncClient', Upstream):
+            self.assertEqual(self.client.post('/automoney/replay', headers=self.headers,
+                                             json=self.payload).status_code, 200)
+            self.assertEqual(self.client.post('/automoney/replay', headers=self.headers,
+                                             json=self.payload).status_code, 429)
+            self.assertEqual(self.post().status_code, 200)
+            self.payload.update(provider='openai', model='cloud:1')
+            self.assertEqual(self.post().status_code, 403)
+
     def test_input_limit(self):
         self.payload['context'] = 'x'*160001
         self.assertEqual(self.post().status_code, 413)

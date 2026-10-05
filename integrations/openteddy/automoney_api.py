@@ -38,10 +38,11 @@ def authorize(request):
 @router.get("/health")
 async def health(request: Request):
     authorize(request)
-    return {"status": "ok", "version": 3, "cloud_enabled":
+    return {"status": "ok", "version": 4, "replay_enabled": os.environ.get("AUTOMONEY_REPLAY_ENABLED") == "true", "cloud_enabled":
             os.environ.get("AUTOMONEY_ALLOW_OPENAI") == "true"}
 
 
+@router.post("/replay")
 @router.post("/analyze")
 async def analyze(request: Request):
     authorize(request)
@@ -68,20 +69,31 @@ async def analyze(request: Request):
     except (ValueError, KeyError, TypeError):
         raise HTTPException(422, "INVALID_INPUT") from None
     backend, model = data["provider"], data["model"]
+    replay = request.url.path.endswith("/replay")
+    if replay and os.environ.get("AUTOMONEY_REPLAY_ENABLED") != "true":
+        raise HTTPException(403, "REPLAY_DISABLED")
     # Server pins models too: a caller cannot select an arbitrarily expensive model.
-    expected = os.environ.get("AUTOMONEY_MODEL", "qwen3.8:27b")
-    if model != expected or backend != os.environ.get("AUTOMONEY_PROVIDER", "ollama"):
+    if replay:
+        expected = os.environ.get("AUTOMONEY_REPLAY_OPENAI_MODEL", "") if backend == "openai" else os.environ.get("AUTOMONEY_MODEL", "qwen3.8:27b")
+        allowed_backend = backend in ("ollama", "openai")
+    else:
+        expected = os.environ.get("AUTOMONEY_MODEL", "qwen3.8:27b")
+        allowed_backend = backend == os.environ.get("AUTOMONEY_PROVIDER", "ollama")
+    if not expected or model != expected or not allowed_backend:
         raise HTTPException(403, "MODEL_NOT_ALLOWED")
     if backend not in ("ollama", "openai"):
         raise HTTPException(403, "PROVIDER_NOT_ALLOWED")
-    if backend == "openai" and os.environ.get("AUTOMONEY_ALLOW_OPENAI") != "true":
+    if backend == "openai" and os.environ.get("AUTOMONEY_REPLAY_ALLOW_OPENAI" if replay else "AUTOMONEY_ALLOW_OPENAI") != "true":
         raise HTTPException(403, "CLOUD_DISABLED")
     if _lock.locked():
         raise HTTPException(429, "BUSY")
     async with _lock:
         now = time.monotonic()
-        limit = max(1, min(96, int(os.environ.get("AUTOMONEY_DAILY_CALL_LIMIT", "48"))))
-        with sqlite3.connect(_root / ".automoney-quota.db", timeout=2) as db:
+        limit = max(1, min(24 if replay else 96, int(os.environ.get(
+            "AUTOMONEY_REPLAY_DAILY_CALL_LIMIT" if replay else "AUTOMONEY_DAILY_CALL_LIMIT",
+            "12" if replay else "48"))))
+        quota_file = ".automoney-replay-quota.db" if replay else ".automoney-quota.db"
+        with sqlite3.connect(_root / quota_file, timeout=2) as db:
             db.execute("CREATE TABLE IF NOT EXISTS calls (timestamp REAL NOT NULL)")
             db.execute("BEGIN IMMEDIATE")
             db.execute("DELETE FROM calls WHERE timestamp < ?", (time.time() - 86400,))

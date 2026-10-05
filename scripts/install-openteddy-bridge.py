@@ -43,7 +43,7 @@ if marker not in text:
 # Keep generated shared secret out of this checkout's commits.
 ignore = target / '.gitignore'
 old = ignore.read_text() if ignore.exists() else ''
-for name in ('.automoney.env', '.automoney-quota.db', 'main.py.before-automoney'):
+for name in ('.automoney.env', '.automoney-quota.db', '.automoney-replay-quota.db', 'main.py.before-automoney'):
     if name not in old.splitlines():
         old += '\n' + name + '\n'
 ignore.write_text(old)

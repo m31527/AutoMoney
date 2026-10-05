@@ -16,9 +16,12 @@ from trader.strategy.provider import ProviderError
 class OpenTeddyProvider:
     name = "openteddy"
 
-    def __init__(self) -> None:
-        self.model = os.environ["OPENTEDDY_MODEL"]
-        self.backend = os.environ.get("OPENTEDDY_PROVIDER", "ollama")
+    def __init__(
+        self, *, backend: str | None = None, model: str | None = None, replay: bool = False
+    ) -> None:
+        self.model = model or os.environ["OPENTEDDY_MODEL"]
+        self.endpoint = "/automoney/replay" if replay else "/automoney/analyze"
+        self.backend = backend or os.environ.get("OPENTEDDY_PROVIDER", "ollama")
         self.base_url = os.environ["OPENTEDDY_URL"].rstrip("/")
         self.token = os.environ["OPENTEDDY_TOKEN"]
         OllamaProvider(self.model, self.base_url)  # Validate origin and model before sending token.
@@ -40,7 +43,7 @@ class OpenTeddyProvider:
             "context": context,
         }
         request = urllib.request.Request(
-            self.base_url + "/automoney/analyze",
+            self.base_url + self.endpoint,
             data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.token},
         )
@@ -91,6 +94,7 @@ class OpenTeddyProvider:
                     "BUSY",
                     "MODEL_NOT_ALLOWED",
                     "CLOUD_DISABLED",
+                    "REPLAY_DISABLED",
                     "PROVIDER_NOT_CONFIGURED",
                     "BRIDGE_DISABLED",
                     "UNAUTHORIZED",
