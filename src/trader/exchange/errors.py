@@ -23,6 +23,18 @@ class RateLimited(ExchangeError):
 class AuthenticationError(ExchangeError):
     code = "EXCHANGE_AUTHENTICATION_FAILED"
 
+    def __init__(self, *, http_status: int | None = None, exchange_code: int | None = None) -> None:
+        super().__init__()
+        self.http_status = http_status
+        self.exchange_code = exchange_code
+        self.hint = {
+            -2014: "API_KEY_FORMAT_INVALID",
+            -2015: "CHECK_TESTNET_KEY_IP_AND_PERMISSIONS",
+            -1022: "CHECK_MATCHING_HMAC_KEY_AND_SECRET",
+        }.get(
+            exchange_code if exchange_code is not None else 0, "HTTP_ACCESS_DENIED_OR_AUTH_FAILURE"
+        )
+
 
 class MalformedResponse(ExchangeError):
     code = "EXCHANGE_MALFORMED_RESPONSE"

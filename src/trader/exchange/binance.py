@@ -174,7 +174,10 @@ class BinanceSpotAdapter:
                 code = data.get("code") if isinstance(data, dict) else None
                 if response.status in (401, 403) or code in (-2014, -2015, -1022):
                     self._trip(AuthenticationError.code)
-                    raise AuthenticationError()
+                    raise AuthenticationError(
+                        http_status=response.status,
+                        exchange_code=code if type(code) is int else None,
+                    )
                 if response.status in (418, 429):
                     retry = next(
                         (v for k, v in response.headers.items() if k.lower() == "retry-after"), "1"

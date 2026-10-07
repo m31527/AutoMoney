@@ -71,3 +71,24 @@ bash scripts/testnet-acceptance.sh --stop
 ## 模型比較是另一項待驗證工作
 
 現有 `artifacts/model-comparison` 的準備檔不等於商業模型回答；本機尚未取得使用者 DGX 的 `answers.jsonl`／`comparison.json`。使用 `MODEL_COMPARE_UPDATE.md` 的獨立六案例比較流程，提供該結果目錄。不要以 Testnet 成功替代模型策略驗證，也不要為了取得資料反覆重跑已計費的比較。
+
+## 認證失敗：正式站金鑰不能用在 Testnet
+
+`www.binance.com/.../my/settings/api-management` 是正式帳戶 API 管理頁。請從 `https://testnet.binance.vision/` 建立 HMAC key/secret，填入 `config/testnet.env`（不要把實際金鑰填進受 Git 追蹤的 `.env.example`）。此工具不改成正式站來配合金鑰。
+
+新版提供不下單的診斷：
+
+```bash
+bash scripts/testnet-acceptance.sh --check-auth
+```
+
+僅顯示經過篩選的 HTTP 狀態、數字錯誤碼與提示，不回傳原始回應、簽名或金鑰。`-2014` 為格式問題，`-2015` 需確認對應環境、IP 與權限，`-1022` 需確認 HMAC key/secret 配對。
+
+原執行曾遇認證失敗時會持久化停止。修正金鑰後執行：
+
+```bash
+bash scripts/testnet-acceptance.sh --resume-testnet
+bash scripts/testnet-acceptance.sh --execute-testnet
+```
+
+第一行只讀取帳戶並核對既有 journal 訂單；通過後解除「認證失敗」造成的停止，不送單。若是手動 stop、其他故障或尚未核清的訂單，拒絕解除。只有第一行成功，才執行第二行，沿用原資料庫及 run-id 繼續。不要刪除資料庫，也不要改新的 run-id 繞過未完成驗收。

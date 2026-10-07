@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from trader.exchange.binance import BinanceSpotAdapter
-from trader.exchange.errors import ExchangeError
+from trader.exchange.errors import AuthenticationError, ExchangeError
 from trader.exchange.models import Credentials, Reconciliation
 from trader.exchange.testnet_transport import TestnetTransport
 from trader.execution.filters import market_quantity
@@ -75,6 +75,8 @@ def run(adapter: BinanceSpotAdapter, state: dict[str, Any], save: Any) -> dict[s
         for asset in set(expected) | set(after)
         if expected.get(asset, Decimal(0)) != after.get(asset, Decimal(0))
     }
+    for key in ("error", "next_step", "hint", "exchange_code", "http_status"):
+        state.pop(key, None)
     state.update(
         after=after,
         balance_mismatches=mismatch,
@@ -86,13 +88,65 @@ def run(adapter: BinanceSpotAdapter, state: dict[str, Any], save: Any) -> dict[s
     return state
 
 
+def authentication_report(error: ExchangeError) -> dict[str, Any]:
+    return {
+        "error": error.code,
+        **(
+            {
+                "http_status": error.http_status,
+                "exchange_code": error.exchange_code,
+                "hint": error.hint,
+            }
+            if isinstance(error, AuthenticationError)
+            else {}
+        ),
+    }
+
+
+def check_and_resume(
+    connection: Any, switch: KillSwitch, credentials: Credentials
+) -> dict[str, Any]:
+    """Read-only validation/reconciliation before clearing an authentication-only stop."""
+    reason = Repository(connection).safety_state().reason
+    if switch.active and reason != AuthenticationError.code:
+        raise ValueError(
+            "Only authentication stops can be resumed here; inspect other stop reasons"
+        )
+    adapter = BinanceSpotAdapter(credentials=credentials, journal=ExchangeJournal(connection))
+    account = adapter.get_account()
+    if not account.can_trade:
+        raise ValueError("Testnet account cannot trade")
+    # A previous POST may have failed authentication during reconciliation. Resolve it first.
+    for row in connection.execute("SELECT client_order_id, request_json FROM exchange_submissions"):
+        request = json.loads(row[1])
+        result = adapter.reconcile(request["symbol"], row[0])
+        if not result.fills_complete or result.order.status not in (
+            "FILLED",
+            "CANCELED",
+            "EXPIRED",
+            "REJECTED",
+        ):
+            raise ValueError("Unresolved existing order; stop remains active")
+    if switch.active:
+        switch.resume()
+    return {
+        "status": "AUTH_VERIFIED_STOP_CLEARED",
+        "orders_submitted": 0,
+        "next_step": "Rerun --execute-testnet with the same data directory and run-id",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=Path("data/testnet-acceptance"))
     parser.add_argument("--run-id", default="acceptance-001")
     parser.add_argument("--execute-testnet", action="store_true")
     parser.add_argument("--stop", action="store_true")
+    parser.add_argument("--check-auth", action="store_true")
+    parser.add_argument("--resume-testnet", action="store_true")
     args = parser.parse_args()
+    if sum((args.stop, args.check_auth, args.resume_testnet, args.execute_testnet)) > 1:
+        parser.error("Choose only one operation")
     args.data.mkdir(parents=True, exist_ok=True)
     connection = connect(args.data / "acceptance.db")
     switch = KillSwitch(Repository(connection))
@@ -103,6 +157,40 @@ def main() -> None:
         switch.kill()
         print("Testnet acceptance stopped; PAPER unchanged")
         connection.close()
+        return
+    if args.check_auth or args.resume_testnet:
+        try:
+            credentials = Credentials(
+                os.environ["BINANCE_TESTNET_API_KEY"], os.environ["BINANCE_TESTNET_API_SECRET"]
+            )
+            with (args.data / "worker.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if args.resume_testnet:
+                    report = check_and_resume(connection, switch, credentials)
+                else:
+                    account = BinanceSpotAdapter(credentials=credentials).get_account()
+                    report = {
+                        "status": "AUTH_OK",
+                        "can_trade": account.can_trade,
+                        "orders_submitted": 0,
+                        "stop_active": switch.active,
+                    }
+                print(encode(report))
+        except ExchangeError as error:
+            print(encode({"status": "AUTH_CHECK_FAILED", **authentication_report(error)}))
+            raise SystemExit(1) from None
+        except (KeyError, ValueError):
+            print(
+                encode(
+                    {
+                        "status": "CHECK_FAILED",
+                        "hint": "Check credentials or persistent stop/order state",
+                    }
+                )
+            )
+            raise SystemExit(1) from None
+        finally:
+            connection.close()
         return
     if not args.execute_testnet:
         print(
@@ -168,6 +256,8 @@ def main() -> None:
                 ),
                 next_step="Preserve database and run-id; inspect report, never delete to retry",
             )
+            if isinstance(error, ExchangeError):
+                state.update(authentication_report(error))
             save(state)
             print(encode(state))
             raise SystemExit(1) from None
