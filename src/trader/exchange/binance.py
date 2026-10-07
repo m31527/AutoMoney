@@ -1,4 +1,4 @@
-"""Binance Spot Testnet REST adapter. Network mutations remain disabled in Phase B."""
+"""Binance Spot Testnet adapter. Default transport remains read-only."""
 
 import hashlib
 import hmac
@@ -347,8 +347,8 @@ class BinanceSpotAdapter:
             or quantity <= 0
         ):
             raise ValueError("Only positive-quantity BUY/SELL spot orders are allowed")
-        # Only mock transports can exercise this path in Phase B. The built-in transport
-        # has an independent mutation block; no environment flag enables network trading.
+        # Default transport blocks mutations. The isolated acceptance command must
+        # explicitly inject its origin-restricted Testnet transport.
         if (
             not self.transport.supports_mutations
             or self.mode != TradingMode.TESTNET

@@ -19,3 +19,4 @@ config/ollama.env
 artifacts/
 
 config/openteddy.env
+config/testnet.env
