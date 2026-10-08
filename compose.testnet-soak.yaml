@@ -1,0 +1,18 @@
+services:
+  testnet-soak:
+    build: .
+    entrypoint: ["python", "-m", "trader.testnet_soak"]
+    command: ["run"]
+    user: "${SOAK_UID:-1000}:${SOAK_GID:-1000}"
+    env_file: config/testnet.env
+    environment:
+      TRADING_MODE: TESTNET
+      ENABLE_LIVE_TRADING: "false"
+    volumes:
+      - ./data/testnet-soak:/soak
+    restart: "no"
+    init: true
+    read_only: true
+    tmpfs: /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

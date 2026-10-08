@@ -4,9 +4,9 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
 action=${1:-help}
 case "$action" in
-  check|pull|shadow-btc-eth|shadow-sol-xrp|exit-btc-eth|exit-sol-xrp|testnet-auth) ;;
+  check|pull|shadow-btc-eth|shadow-sol-xrp|exit-btc-eth|exit-sol-xrp|testnet-auth|soak-start|soak-status) ;;
   *)
-    echo '用法：bash scripts/deploy-dgx.sh {check|pull|shadow-btc-eth|shadow-sol-xrp|exit-btc-eth|exit-sol-xrp|testnet-auth}'
+    echo '用法：bash scripts/deploy-dgx.sh {check|pull|shadow-btc-eth|shadow-sol-xrp|exit-btc-eth|exit-sol-xrp|testnet-auth|soak-start|soak-status}'
     echo 'check：只檢查連線；其餘先 pull，再執行指定項目。'
     exit 0 ;;
 esac
@@ -44,6 +44,8 @@ case "$action" in
   exit-btc-eth) bash scripts/research-v2.sh start btc-eth ;;
   exit-sol-xrp) bash scripts/research-v2.sh start sol-xrp ;;
   testnet-auth) bash scripts/testnet-acceptance.sh --check-auth ;;
+  soak-start) bash scripts/testnet-soak.sh start ;;
+  soak-status) bash scripts/testnet-soak.sh status ;;
 esac
 printf '部署指令完成：%s\n' "$action"
 git log -1 --oneline
