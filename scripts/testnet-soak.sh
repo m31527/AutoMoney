@@ -9,5 +9,6 @@ case "${1:-status}" in
  status) dc run --rm --no-deps testnet-soak status ;;
  stop) dc run --rm --no-deps testnet-soak stop ;;
  logs) dc logs --tail 30 ;;
- *) echo '用法：bash scripts/testnet-soak.sh {start|status|stop|logs}'; exit 1 ;;
+ readiness) dc run --rm --no-deps --entrypoint python testnet-soak -m trader.live_readiness ;;
+ *) echo '用法：bash scripts/testnet-soak.sh {start|status|stop|logs|readiness}'; exit 1 ;;
 esac

@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from decimal import Decimal as D
 from pathlib import Path
@@ -17,6 +17,7 @@ from trader.exchange.binance import BinanceSpotAdapter
 from trader.exchange.models import Credentials, Reconciliation
 from trader.exchange.testnet_transport import TestnetTransport
 from trader.execution.filters import market_quantity
+from trader.launch_policy import INITIAL_POLICY
 from trader.market.data import collect_market
 from trader.models import Action, MarketSnapshot
 from trader.safety.kill_switch import KillSwitch
@@ -25,8 +26,8 @@ from trader.storage.exchange_journal import ExchangeJournal
 from trader.storage.repository import Repository, encode
 from trader.strategy.baseline import HourlyTrendStrategy
 
-CAPITAL = D("100")
-ORDER = D("50")
+CAPITAL = INITIAL_POLICY.capital
+ORDER = INITIAL_POLICY.order_limit
 
 
 def guard(
@@ -46,11 +47,13 @@ def guard(
     if (ask / bid - 1) * 10000 > 20:
         return "SPREAD_LIMIT"
     if action == Action.BUY:
-        if state["loss_latched"]:
+        if state["loss_latched"] or state.get("cumulative_loss_latched", False):
             return "LOSS_LIMIT"
         if D(state["btc"]) * ask >= 5:
             return "POSITION_EXISTS"
-        if D(state["btc"]) * ask + amount > 50 or D(state["cash"]) < amount * D("1.003"):
+        if D(state["btc"]) * ask + amount > INITIAL_POLICY.exposure_limit or D(
+            state["cash"]
+        ) < amount * D("1.003"):
             return "BUDGET_LIMIT"
         # Preserve conservative 40 bps fee/slippage estimate plus spread + 5 bps edge.
         if edge < 45 + (ask / bid - 1) * 10000:
@@ -154,6 +157,20 @@ def main() -> None:
                     execution="TESTNET",
                 )
                 save({"event": "STARTED", "at": time.time()})
+            if state.get("policy_version") != INITIAL_POLICY.version:
+                if state["pending"] or D(state["btc"]) != 0 or state["orders"] != 0:
+                    raise ValueError("POLICY_CHANGE_REQUIRES_REVIEW")
+                state.update(
+                    policy_version=INITIAL_POLICY.version,
+                    policy=asdict(INITIAL_POLICY),
+                    policy_started=time.time(),
+                    deadline=time.time() + 48 * 3600,
+                    previous_cycles=state["cycles"],
+                    cycles=0,
+                    max_gap_seconds=0,
+                )
+                state.pop("last_cycle", None)
+                save({"event": "POLICY_ACTIVATED", "policy": asdict(INITIAL_POLICY)})
             while state["pending"] or time.time() < state["deadline"]:
                 if switch.active:
                     raise ValueError("PERSISTENT_STOP")
@@ -185,10 +202,15 @@ def main() -> None:
                 day = now.date().isoformat()
                 if state["day"] != day:
                     state.update(day=day, opening_equity=str(equity), loss_latched=False)
+                if equity <= CAPITAL - INITIAL_POLICY.cumulative_loss:
+                    state["cumulative_loss_latched"] = True
                 state["times"] = [
                     t for t in state["times"] if datetime.fromtimestamp(t, UTC).date() == now.date()
                 ]
-                if equity <= D(state["opening_equity"]) - 2 or equity <= CAPITAL - 3:
+                if (
+                    equity <= D(state["opening_equity"]) - INITIAL_POLICY.daily_loss
+                    or equity <= CAPITAL - INITIAL_POLICY.cumulative_loss
+                ):
                     state["loss_latched"] = True
                 m = market.ticker
                 snap = MarketSnapshot(
@@ -212,6 +234,10 @@ def main() -> None:
                 )
                 strategy_result = HourlyTrendStrategy().propose(snap, now)
                 proposal = strategy_result.proposal
+                if proposal.action != Action.HOLD:
+                    proposal = replace(
+                        proposal, requested_notional_usd=min(ORDER, proposal.requested_notional_usd)
+                    )
                 reason = guard(
                     state,
                     proposal.action,
