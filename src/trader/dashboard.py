@@ -1,6 +1,7 @@
 """Local, read-only dashboard. Reads SQLite without migrations or trading imports."""
 
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -351,7 +352,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.end_headers()
                     shutil.copyfileobj(output, self.wfile)
                 return
-            if url.path == "/api/summary":
+            if url.path == "/api/readiness":
+                from trader.live_readiness import read_report
+
+                result = read_report(Path(os.environ.get("TESTNET_SOAK_DIR", "data/testnet-soak")))
+            elif url.path == "/api/summary":
                 result = summary(self.root)
             elif url.path == "/api/records":
                 query = parse_qs(url.query, max_num_fields=8)

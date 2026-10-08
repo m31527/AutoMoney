@@ -47,13 +47,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", type=Path, default=Path("/soak"))
     args = parser.parse_args()
-    path = (args.data / "soak.db").resolve()
+    print(encode(read_report(args.data)))
+
+
+def read_report(data: Path) -> dict[str, Any]:
+    path = (data / "soak.db").resolve()
     if not path.is_file():
-        raise SystemExit("NO_OBSERVATION_DATABASE")
+        return {"available": False, "live_status": "BLOCKED"}
     with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
         row = db.execute("SELECT payload FROM soak_state WHERE id=1").fetchone()
         if not row:
-            raise SystemExit("NOT_STARTED")
+            return {"available": False, "live_status": "BLOCKED"}
         state = json.loads(row[0])
         events = [json.loads(r[0]) for r in db.execute("SELECT payload FROM soak_events")]
         # Read the existing safety repository without migrations or writes.
@@ -61,7 +65,24 @@ def main() -> None:
 
         db.row_factory = sqlite3.Row
         stopped = Repository(db).safety_state().killed
-        print(encode(assess(state, events, stopped)))
+        report = assess(state, events, stopped)
+        report.update(
+            available=True,
+            observation={
+                key: state.get(key)
+                for key in (
+                    "status",
+                    "cycles",
+                    "orders",
+                    "policy_started",
+                    "deadline",
+                    "last_cycle",
+                    "equity",
+                    "btc",
+                )
+            },
+        )
+        return report
 
 
 if __name__ == "__main__":

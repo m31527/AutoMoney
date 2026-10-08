@@ -52,9 +52,11 @@ function renderMarkets(data){
 async function sync(){
   const seq=++sequence;
   const source=$('source').value,status=$('status').value;
-  const results=await Promise.allSettled([api('/api/summary'),api('/api/records?'+new URLSearchParams({source,status,page:String(page)}))]);
+  const results=await Promise.allSettled([api('/api/summary'),api('/api/records?'+new URLSearchParams({source,status,page:String(page)})),api('/api/readiness')]);
   if(seq!==sequence)return;
   alertMessage('');
+  if(results[2].status==='fulfilled')changed('readiness',results[2].value,renderReadiness);
+  else {$('launch-status').textContent='驗收資料暫時無法讀取；實盤維持關閉';$('launch-approve').disabled=true;}
   if(results[0].status==='fulfilled'){
     const data=results[0].value;
     changed('markets',{markets:data.markets,holdings:data.holdings,symbols:data.risk?.symbols},renderMarkets);
@@ -85,3 +87,17 @@ $('export-form').addEventListener('submit',event=>{
  $('export-start-utc').value=a?a+':00+08:00':'';
  $('export-end-utc').value=b?b+':00+08:00':'';
 });
+
+function renderReadiness(data){
+  $('launch-approve').disabled=true;
+  $('launch-checks').replaceChildren();$('launch-blockers').replaceChildren();
+  if(!data.available){$('launch-status').textContent='尚未連接 Testnet 驗收資料；實盤未啟用';$('launch-policy').textContent='';$('launch-progress').textContent='';return;}
+  const p=data.policy,o=data.observation;
+  $('launch-status').textContent='實盤未啟用 · '+({RUNNING:'測試網觀察進行中',BLOCKED:'測試已停機，需檢查',OBSERVATION_COMPLETE_REVIEW_REQUIRED:'觀察結束，等待驗收'}[o.status]||'等待驗收');
+  $('launch-policy').textContent=`本金 ${p.capital} USDT · 單筆 ${p.order_limit} · 總持倉 ${p.exposure_limit} · 每日虧損 ${p.daily_loss}／累計 ${p.cumulative_loss} 停買 · 不自動加碼`;
+  $('launch-progress').textContent=`${o.cycles} 輪觀察 · ${o.orders} 筆成交 · 淨值 ${o.equity||'—'} USDT · 最後更新 ${o.last_cycle?date(o.last_cycle):'—'} · 觀察期結束 ${o.deadline?date(o.deadline*1000):'—'}`;
+  const labels={current_policy:'已套用同意的限額','48h_observed':'完成 48 小時觀察','500_cycles':'至少 500 輪有效觀察',max_gap_15m:'最大觀察間隔不超過 15 分鐘',strategy_buy_and_sell:'策略買入與賣出均已成交',no_pending_order:'沒有待確認訂單',no_persistent_stop:'未觸發停機',observation_completed:'觀察期已結束',no_faults:'沒有異常停機紀錄'};
+  for(const [key,ok] of Object.entries(data.testnet_checks))$('launch-checks').append(element('li',(ok?'✓ 已符合：':'○ 未符合：')+(labels[key]||key)));
+  const blockers={PRODUCTION_KEY_PERMISSIONS_NOT_VERIFIED:'正式 API 權限尚未驗證',PRODUCTION_EXECUTION_NOT_IMPLEMENTED:'正式下單入口尚未完成',MANUAL_RELEASE_NOT_IMPLEMENTED:'人工放行流程尚未完成',STRATEGY_PERFORMANCE_REVIEW_REQUIRED:'策略表現尚待人工評估'};
+  for(const key of data.live_blockers)$('launch-blockers').append(element('li',blockers[key]||key));
+}

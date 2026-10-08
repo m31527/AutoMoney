@@ -115,3 +115,37 @@ class SoakTests(unittest.TestCase):
         s = self.state()
         s["cumulative_loss_latched"] = True
         self.assertEqual(self.check(s), "LOSS_LIMIT")
+
+    def test_dashboard_report_missing_does_not_create_database(self):
+        import tempfile
+        from pathlib import Path
+
+        from trader.live_readiness import read_report
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "missing"
+            self.assertFalse(read_report(path)["available"])
+            self.assertFalse(path.exists())
+
+    def test_dashboard_report_only_exposes_observation_allowlist(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from trader.live_readiness import read_report
+        from trader.storage.db import connect
+
+        with tempfile.TemporaryDirectory() as folder:
+            db = connect(Path(folder) / "soak.db")
+            db.execute("CREATE TABLE soak_state(id INTEGER PRIMARY KEY,payload TEXT)")
+            db.execute("CREATE TABLE soak_events(id INTEGER PRIMARY KEY,payload TEXT)")
+            with db:
+                db.execute(
+                    "INSERT INTO soak_state VALUES (1,?)",
+                    (json.dumps({"base_cash": "private", "cycles": 1}),),
+                )
+            db.close()
+            report = read_report(Path(folder))
+            self.assertTrue(report["available"])
+            self.assertNotIn("private", json.dumps(report, default=str))
+            self.assertEqual(report["live_status"], "BLOCKED")

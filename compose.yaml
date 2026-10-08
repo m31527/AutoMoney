@@ -37,10 +37,12 @@ services:
     environment:
       TRADING_MODE: PAPER
       DATABASE_URL: sqlite:////data/paper.db
+      TESTNET_SOAK_DIR: /soak
     ports:
       - "8080:8080"
     volumes:
       - paper-data:/data:ro
+      - ./data/testnet-soak:/soak:ro
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
