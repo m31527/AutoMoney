@@ -149,3 +149,48 @@ class SoakTests(unittest.TestCase):
             self.assertTrue(report["available"])
             self.assertNotIn("private", json.dumps(report, default=str))
             self.assertEqual(report["live_status"], "BLOCKED")
+
+    def test_recovery_refuses_pending_and_manual_stop(self):
+        from unittest.mock import MagicMock, patch
+
+        from trader.testnet_soak import recover_empty_observation
+
+        adapter, db, switch = MagicMock(), MagicMock(), MagicMock()
+        s = dict(error="OrderRejected", pending="pending", orders=0, btc="0")
+        with patch("trader.testnet_soak.Repository") as repo:
+            repo.return_value.safety_state.return_value.reason = "SOAK_REVIEW_REQUIRED"
+            with self.assertRaises(ValueError):
+                recover_empty_observation(adapter, db, switch, s)
+            s["pending"] = None
+            repo.return_value.safety_state.return_value.reason = "Operator requested stop"
+            with self.assertRaises(ValueError):
+                recover_empty_observation(adapter, db, switch, s)
+        switch.resume.assert_not_called()
+        adapter.get_account.assert_not_called()
+
+    def test_recovery_checks_real_balances_before_clearing(self):
+        from unittest.mock import MagicMock, patch
+
+        from trader.exchange.models import Balance
+        from trader.testnet_soak import recover_empty_observation
+
+        adapter, db, switch = MagicMock(), MagicMock(), MagicMock()
+        db.execute.return_value.fetchone.return_value = (0,)
+        adapter.get_open_orders.return_value = ()
+        adapter.get_account.return_value.can_trade = True
+        adapter.get_account.return_value.balances = (
+            Balance("BTC", D("1"), D("0")),
+            Balance("USDT", D("1000"), D("0")),
+        )
+        s = dict(
+            error="OrderRejected", pending=None, orders=0, btc="0", base_btc="1", base_cash="1001"
+        )
+        with patch("trader.testnet_soak.Repository") as repo:
+            repo.return_value.safety_state.return_value.reason = "SOAK_REVIEW_REQUIRED"
+            with self.assertRaises(ValueError):
+                recover_empty_observation(adapter, db, switch, s)
+            switch.resume.assert_not_called()
+            s["base_cash"] = "1000"
+            recover_empty_observation(adapter, db, switch, s)
+        switch.resume.assert_called_once()
+        adapter.place_order.assert_not_called()

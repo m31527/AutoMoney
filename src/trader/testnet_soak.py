@@ -81,9 +81,37 @@ def apply_fill(state: dict[str, Any], result: Reconciliation) -> None:
     state["times"].append(result.order.updated_at.timestamp())
 
 
+def recover_empty_observation(
+    adapter: BinanceSpotAdapter, db: Any, switch: KillSwitch, state: dict[str, Any]
+) -> None:
+    """Explicit repair only for the known pre-submission read failure; never manual stops."""
+    reason = Repository(db).safety_state().reason
+    if (
+        not switch.active
+        or reason != "SOAK_REVIEW_REQUIRED"
+        or state.get("error") not in ("OrderRejected", "ReadRequestRejected")
+        or state.get("pending")
+        or state.get("orders", 0) != 0
+        or D(state["btc"]) != 0
+        or db.execute("SELECT COUNT(*) FROM exchange_submissions").fetchone()[0] != 0
+    ):
+        raise ValueError("RECOVERY_REQUIRES_MANUAL_REVIEW")
+    account = adapter.get_account()
+    funds = {b.asset: b.free + b.locked for b in account.balances}
+    if (
+        not account.can_trade
+        or adapter.get_open_orders("BTCUSDT")
+        or funds.get("BTC", D(0)) != D(state["base_btc"])
+        or funds.get("USDT", D(0)) != D(state["base_cash"])
+    ):
+        raise ValueError("RECOVERY_ACCOUNT_MISMATCH")
+    # Only clears the known fault after read-only verification, inside the worker lock.
+    switch.resume()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("run", "status", "stop"))
+    parser.add_argument("action", choices=("run", "status", "stop", "recover-read-failure"))
     parser.add_argument("--data", type=Path, default=Path("/soak"))
     args = parser.parse_args()
     if (
@@ -125,6 +153,24 @@ def main() -> None:
                 db.execute("INSERT OR REPLACE INTO soak_state VALUES (1,?)", (encode(state),))
                 db.execute("INSERT INTO soak_events(payload) VALUES (?)", (encode(event),))
             print(encode(event), flush=True)
+
+        if args.action == "recover-read-failure":
+            if state is None:
+                raise SystemExit("NO_STATE")
+            recover_empty_observation(adapter, db, switch, state)
+            old = dict(state)
+            state.update(
+                status="RUNNING",
+                policy_started=time.time(),
+                deadline=time.time() + 48 * 3600,
+                cycles=0,
+                max_gap_seconds=0,
+            )
+            state.pop("error", None)
+            state.pop("last_cycle", None)
+            save({"event": "RECOVERY_VERIFIED", "at": time.time(), "previous": old})
+            print("RECOVERY_VERIFIED_NO_ORDERS; start worker to continue", flush=True)
+            return
 
         try:
             if switch.active:
@@ -312,8 +358,20 @@ def main() -> None:
         except Exception as error:
             switch.trip("SOAK_REVIEW_REQUIRED")
             if state is not None:
-                state.update(status="BLOCKED", error=type(error).__name__)
-                save({"event": "BLOCKED", "error": type(error).__name__})
+                diagnostic = {
+                    key: getattr(error, key)
+                    for key in ("code", "path", "http_status", "exchange_code")
+                    if hasattr(error, key)
+                }
+                state.update(status="BLOCKED", error=type(error).__name__, diagnostic=diagnostic)
+                save(
+                    {
+                        "event": "BLOCKED",
+                        "error": type(error).__name__,
+                        "diagnostic": diagnostic,
+                        "at": time.time(),
+                    }
+                )
             raise SystemExit(
                 "SOAK stopped; inspect persistent records; no automatic retry"
             ) from None

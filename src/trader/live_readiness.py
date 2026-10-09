@@ -14,6 +14,11 @@ def assess(state: dict[str, Any], events: list[dict[str, Any]], stopped: bool) -
     from dataclasses import asdict
     from datetime import datetime
 
+    # Prior faults remain stored; evaluate only the explicitly restarted observation window.
+    recovery = max(
+        (i for i, e in enumerate(events) if e.get("event") == "RECOVERY_VERIFIED"), default=-1
+    )
+    events = events[recovery + 1 :]
     started = state.get("policy_started", 0)
     last = datetime.fromisoformat(state["last_cycle"]).timestamp() if state.get("last_cycle") else 0
     sides = {e["result"]["order"]["side"] for e in events if e.get("event") == "FILL"}

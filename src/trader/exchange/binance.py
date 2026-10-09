@@ -25,6 +25,7 @@ from trader.exchange.errors import (
     OrderNotFound,
     OrderRejected,
     RateLimited,
+    ReadRequestRejected,
     TemporaryError,
     TradingDisabled,
     UnsafeAccount,
@@ -195,9 +196,18 @@ class BinanceSpotAdapter:
                         raise error
                 elif response.status >= 500 or code in (-1006, -1007):
                     error = TemporaryError()
+                elif method == "GET" and signed and code == -1021 and attempt < 2:
+                    self.sync_time()
+                    continue
                 elif code == -2013:
                     raise OrderNotFound()
                 elif not 200 <= response.status < 300 or (type(code) is int and code < 0):
+                    if method == "GET":
+                        raise ReadRequestRejected(
+                            path=path,
+                            http_status=response.status,
+                            exchange_code=code if type(code) is int else None,
+                        )
                     raise OrderRejected()
                 elif data is None:
                     self._trip(MalformedResponse.code)

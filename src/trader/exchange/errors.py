@@ -48,6 +48,16 @@ class OrderRejected(ExchangeError):
     code = "EXCHANGE_REQUEST_REJECTED"
 
 
+class ReadRequestRejected(OrderRejected):
+    code = "EXCHANGE_READ_REQUEST_REJECTED"
+
+    def __init__(self, *, path: str, http_status: int, exchange_code: int | None) -> None:
+        super().__init__()
+        self.path = path
+        self.http_status = http_status
+        self.exchange_code = exchange_code
+
+
 class AmbiguousOrder(ExchangeError):
     code = "ORDER_STATE_UNKNOWN_RECONCILIATION_REQUIRED"
 
