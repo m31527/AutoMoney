@@ -1,6 +1,7 @@
 # Connect to an existing Ollama server; does not start or download Ollama.
 services:
   ai-trader:
+    restart: unless-stopped
     build: .
     init: true
     command: ["ollama-start"]
