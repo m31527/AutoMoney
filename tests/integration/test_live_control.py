@@ -359,3 +359,41 @@ class ControlHTTPTests(unittest.TestCase):
                 self.assertTrue(KillSwitch(Repository(db)).active)
             finally:
                 db.close()
+
+
+class ReadonlyReadinessTests(unittest.TestCase):
+    def test_closed_wal_does_not_create_sidecars_on_original_mount(self):
+        from trader.live_readiness import read_report
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "soak.db"
+            db = connect(path)
+            with db:
+                db.execute("CREATE TABLE soak_state (id INTEGER PRIMARY KEY, payload TEXT)")
+                db.execute("CREATE TABLE soak_events (id INTEGER PRIMARY KEY, payload TEXT)")
+                db.execute("INSERT INTO soak_state VALUES (1,?)", ('{"cycles":0}',))
+            db.close()
+            before = {f.name for f in Path(folder).iterdir()}
+            self.assertTrue(read_report(Path(folder))["available"])
+            self.assertEqual(before, {f.name for f in Path(folder).iterdir()})
+
+    def test_snapshot_race_is_rejected_instead_of_ignoring_wal(self):
+        import shutil
+        import sqlite3
+
+        from trader.live_readiness import readonly_connection
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "probe.db"
+            path.write_bytes(b"fixture")
+            original = shutil.copyfile
+
+            def racing(source, destination):
+                result = original(source, destination)
+                Path(str(path) + "-wal").write_bytes(b"new journal")
+                return result
+
+            with patch("trader.live_readiness.shutil.copyfile", side_effect=racing):
+                with self.assertRaisesRegex(sqlite3.OperationalError, "CHANGED_RETRY"):
+                    with readonly_connection(path):
+                        self.fail("Must not use a stale main file")

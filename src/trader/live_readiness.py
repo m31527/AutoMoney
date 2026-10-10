@@ -2,7 +2,11 @@
 
 import argparse
 import json
+import shutil
 import sqlite3
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -59,11 +63,41 @@ def main() -> None:
     print(encode(read_report(args.data)))
 
 
+@contextmanager
+def readonly_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    """Read WAL safely on read-only Docker mounts, including after the writer exits.
+
+    A closed WAL database can require new shm files even for mode=ro. Only copy
+    a checkpointed main file when no WAL exists and its identity stays stable.
+    Active WAL databases are always read by SQLite itself, never copied piecemeal.
+    """
+    wal = Path(str(path) + "-wal")
+    with tempfile.TemporaryDirectory(prefix="readiness-") as folder:
+        source = path
+        if not wal.exists():
+            before = path.stat()
+            source = Path(folder) / "snapshot.db"
+            shutil.copyfile(path, source)
+            after = path.stat()
+            if wal.exists() or (
+                before.st_ino,
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            ) != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                raise sqlite3.OperationalError("READINESS_CHANGED_RETRY")
+        connection = sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+
 def read_report(data: Path) -> dict[str, Any]:
     path = (data / "soak.db").resolve()
     if not path.is_file():
         return {"available": False, "live_status": "BLOCKED"}
-    with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as db:
+    with readonly_connection(path) as db:
         row = db.execute("SELECT payload FROM soak_state WHERE id=1").fetchone()
         if not row:
             return {"available": False, "live_status": "BLOCKED"}
