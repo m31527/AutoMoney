@@ -62,6 +62,7 @@ class LiveTests(unittest.TestCase):
         return self.control.prepare("BUY", "11")
 
     def test_missing_evidence_or_key_or_enable_never_sends(self):
+        self.assertIsNone(self.control.status()["state"]["cash"])
         with patch(
             "trader.live_control.read_report", return_value={"testnet_status": "NOT_PASSED"}
         ):

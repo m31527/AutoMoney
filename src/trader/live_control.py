@@ -97,7 +97,11 @@ class LiveControl:
             "testnet_passed": evidence.get("testnet_status") == "REVIEW_REQUIRED",
             "policy": asdict(INITIAL_POLICY),
             "state": {
-                k: self.state.get(k)
+                k: (
+                    None
+                    if k in ("cash", "btc", "equity") and "base_cash" not in self.state
+                    else self.state.get(k)
+                )
                 for k in (
                     "status",
                     "cash",
