@@ -3,6 +3,7 @@
 import hmac
 import json
 import os
+import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -57,6 +58,10 @@ class Handler(BaseHTTPRequestHandler):
     def run_action(self, action: str, body: dict[str, object]) -> None:
         try:
             self.reply(200, operate(Path("/live"), Path("/soak"), action, body))
+        except BlockingIOError:
+            self.reply(409, {"error": "CONTROL_BUSY"})
+        except sqlite3.Error:
+            self.reply(503, {"error": "CONTROL_STORAGE_UNAVAILABLE"})
         except Exception as error:
             # Never serialize exception repr, transport URLs, keys or exchange raw bodies.
             message = (

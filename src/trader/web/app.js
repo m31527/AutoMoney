@@ -56,7 +56,7 @@ async function sync(){
   if(seq!==sequence)return;
   alertMessage('');
   if(results[2].status==='fulfilled')changed('readiness',results[2].value,renderReadiness);
-  else {$('launch-status').textContent='驗收資料暫時無法讀取；實盤維持關閉';$('launch-approve').disabled=true;}
+  else {rendered.delete('readiness');$('launch-status').textContent='驗收資料暫時無法讀取；實盤維持關閉';}
   if(results[0].status==='fulfilled'){
     const data=results[0].value;
     changed('markets',{markets:data.markets,holdings:data.holdings,symbols:data.risk?.symbols},renderMarkets);
