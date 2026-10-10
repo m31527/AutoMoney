@@ -89,7 +89,6 @@ $('export-form').addEventListener('submit',event=>{
 });
 
 function renderReadiness(data){
-  $('launch-approve').disabled=true;
   $('launch-checks').replaceChildren();$('launch-blockers').replaceChildren();
   if(!data.available){$('launch-status').textContent='尚未連接 Testnet 驗收資料；實盤未啟用';$('launch-policy').textContent='';$('launch-progress').textContent='';return;}
   const p=data.policy,o=data.observation;
@@ -98,6 +97,33 @@ function renderReadiness(data){
   $('launch-progress').textContent=`${o.cycles} 輪觀察 · ${o.orders} 筆成交 · 淨值 ${o.equity||'—'} USDT · 最後更新 ${o.last_cycle?date(o.last_cycle):'—'} · 觀察期結束 ${o.deadline?date(o.deadline*1000):'—'}`;
   const labels={current_policy:'已套用同意的限額','48h_observed':'完成 48 小時觀察','500_cycles':'至少 500 輪有效觀察',max_gap_15m:'最大觀察間隔不超過 15 分鐘',strategy_buy_and_sell:'策略買入與賣出均已成交',no_pending_order:'沒有待確認訂單',no_persistent_stop:'未觸發停機',observation_completed:'觀察期已結束',no_faults:'沒有異常停機紀錄'};
   for(const [key,ok] of Object.entries(data.testnet_checks))$('launch-checks').append(element('li',(ok?'✓ 已符合：':'○ 未符合：')+(labels[key]||key)));
-  const blockers={PRODUCTION_KEY_PERMISSIONS_NOT_VERIFIED:'正式 API 權限尚未驗證',PRODUCTION_EXECUTION_NOT_IMPLEMENTED:'正式下單入口尚未完成',MANUAL_RELEASE_NOT_IMPLEMENTED:'人工放行流程尚未完成',STRATEGY_PERFORMANCE_REVIEW_REQUIRED:'策略表現尚待人工評估'};
+  const blockers={PRODUCTION_KEY_PERMISSIONS_NOT_VERIFIED:'正式 API 權限尚未驗證',AUTHENTICATED_PER_ORDER_APPROVAL_REQUIRED:'正式入口已建置，仍須帳戶檢查與逐筆人工放行',STRATEGY_PERFORMANCE_REVIEW_REQUIRED:'策略表現尚待人工評估'};
   for(const key of data.live_blockers)$('launch-blockers').append(element('li',blockers[key]||key));
 }
+
+let liveProposal=null,liveBusy=false;
+const liveErrors={PRODUCTION_CREDENTIALS_MISSING:'尚未設定正式 API 金鑰',TESTNET_ACCEPTANCE_NOT_PASSED:'測試網驗收尚未通過',LIVE_EXECUTION_DISABLED:'伺服器正式下單開關仍關閉',AUTH_REQUIRED:'請輸入正確的操作密碼',UNSAFE_OR_MISSING_KEY_PERMISSIONS:'金鑰權限不符合要求或缺少欄位，請檢查 IP 限制、現貨交易及提款／轉帳權限',PENDING_ORDER_RECONCILE_REQUIRED:'有待確認訂單，請先查詢成交',PERSISTENT_STOP:'正式下單已停止',NO_PENDING_ORDER:'目前沒有待確認訂單',PROPOSAL_EXPIRED_OR_KEY_CHANGED:'交易預覽已過期，請重新準備',ACCOUNT_DRIFT_RECONCILE_REQUIRED:'實際餘額與本系統帳本不一致，請核對',CONTROL_UNAVAILABLE_CHECK_STATUS:'控制服務暫時無回應；請先查詢狀態與成交，勿重複送單',LIVE_CONTROL_NOT_CONFIGURED:'此頁尚未連接正式控制服務',RATE_OR_COOLDOWN_LIMIT:'尚在 30 分鐘冷卻期，或已達每日 4 筆上限'};
+async function liveStatus(){
+ try{const r=await fetch('/api/live/status');const d=await r.json();if(!r.ok)throw Error(d.error);$('live-status').textContent=`正式金鑰：${d.credentials_configured?'已設定（仍需檢查）':'未設定'} · 下單開關：${d.execution_enabled?'已開':'關閉'} · 測試網驗收：${d.testnet_passed?'符合':'未通過'} · 停機：${d.stop_active?'是':'否'} · 正式成交 ${d.state.orders||0} 筆 · 現金 ${d.state.cash||'—'} USDT · BTC ${d.state.btc||'0'} · 狀態 ${d.state.status} · 上次權限與餘額檢查 ${d.state.last_check?date(d.state.last_check*1000):'尚未通過'}`;}
+ catch(e){$('live-status').textContent=liveErrors[e.message]||'正式控制服務尚未就緒';}
+}
+async function liveAction(action,body={}){
+ if(location.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(location.hostname)){$('live-result').textContent='正式操作請使用 SSH 加密連線，再開啟 http://localhost:18080；操作密碼不會送出。';return;}
+ if(liveBusy&&action!=='stop')return;liveBusy=true;$('live-approve').disabled=true;
+ $('live-result').textContent='處理中，請等待確認…';
+ try{const r=await fetch('/api/live/'+action,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+$('live-token').value},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error);
+ if(action==='prepare'){liveProposal=d;$('live-preview').textContent=`真實交易預覽：${d.side==='BUY'?'買入':'賣出'} ${d.quantity} BTC，預估 ${Number(d.estimated_usdt).toFixed(4)} USDT（費用另計），${date(d.expires*1000)} 到期。`;}
+ else if(action==='approve'||action==='stop'||action==='resume'){liveProposal=null;$('live-preview').textContent='沒有可放行的交易預覽';$('live-confirm').value='';$('live-reviewed').checked=false;}
+ $('live-result').textContent=action==='approve'?'已送出並確認成交；餘額已更新。':'操作完成。';}
+ catch(e){$('live-result').textContent=liveErrors[e.message]||e.message;if(action==='approve'){liveProposal=null;$('live-preview').textContent='放行未完成或結果待確認，請先查詢成交與狀態。';}}
+ finally{liveBusy=false;liveEnable();await liveStatus();}
+}
+function liveEnable(){$('live-approve').disabled=liveBusy||!liveProposal||Date.now()>liveProposal.expires*1000||!$('live-reviewed').checked||$('live-confirm').value!=='我確認使用真實 USDT 下這一筆訂單';}
+$('live-preflight').addEventListener('click',()=>liveAction('preflight'));
+$('live-reconcile').addEventListener('click',()=>liveAction('reconcile'));
+$('live-stop').addEventListener('click',()=>liveAction('stop'));
+$('live-resume').addEventListener('click',()=>{const text=prompt('核對帳本後，輸入：我確認已核對帳本並解除停機');if(text)liveAction('resume',{confirmation:text});});
+$('live-prepare').addEventListener('click',()=>{liveProposal=null;liveAction('prepare',{side:$('live-side').value,amount:$('live-amount').value});});
+$('live-approve').addEventListener('click',()=>{if(liveProposal)liveAction('approve',{id:liveProposal.id,confirmation:$('live-confirm').value,reviewed:$('live-reviewed').checked});});
+$('live-confirm').addEventListener('input',liveEnable);$('live-reviewed').addEventListener('change',liveEnable);
+setInterval(()=>{liveEnable();if(!liveBusy)liveStatus();},10000);liveStatus();

@@ -6,6 +6,7 @@ mkdir -p data/testnet-soak
 dc() { docker compose -p automoney-soak -f compose.testnet-soak.yaml "$@"; }
 case "${1:-status}" in
  start) dc up --build -d ;;
+ recover-pending|resume-reconciled) dc run --rm --no-deps testnet-soak "$1" ;;
  recover-read-failure) dc run --rm --no-deps testnet-soak recover-read-failure ;;
  status) dc run --rm --no-deps testnet-soak status ;;
  stop) dc run --rm --no-deps testnet-soak stop ;;

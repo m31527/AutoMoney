@@ -315,8 +315,65 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def live_proxy(self, action: str, body: bytes | None = None) -> None:
+        import urllib.error
+        import urllib.request
+
+        base = os.environ.get("LIVE_CONTROL_URL", "")
+        if base != "http://live-control:8090":
+            self.send(503, b'{"error":"LIVE_CONTROL_NOT_CONFIGURED"}', "application/json")
+            return
+        headers = {"Content-Type": "application/json"}
+        if body is not None:
+            headers["Authorization"] = self.headers.get("Authorization", "")
+        request = urllib.request.Request(base + "/" + action, data=body, headers=headers)
+        from trader.exchange.transport import NoRedirect
+
+        opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(request, timeout=90) as response:
+                self.send(response.status, response.read(65536), "application/json")
+        except urllib.error.HTTPError as error:
+            with error:
+                self.send(error.code, error.read(65536), "application/json")
+        except (OSError, urllib.error.URLError):
+            self.send(503, b'{"error":"CONTROL_UNAVAILABLE_CHECK_STATUS"}', "application/json")
+
+    def do_POST(self) -> None:
+        from trader.live_server import ACTIONS
+
+        action = self.path.removeprefix("/api/live/")
+        # Same-origin browser requests plus a non-cookie bearer token. No CORS.
+        origin = self.headers.get("Origin")
+        if (
+            not self.path.startswith("/api/live/")
+            or action not in ACTIONS
+            or self.headers.get("Content-Type") != "application/json"
+            or (
+                origin is not None
+                and origin
+                not in (
+                    "http://" + self.headers.get("Host", ""),
+                    "https://" + self.headers.get("Host", ""),
+                )
+            )
+        ):
+            self.send(403, b'{"error":"REQUEST_REJECTED"}', "application/json")
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+            if not 0 < size <= 4096:
+                raise ValueError()
+        except ValueError:
+            self.send(400, b'{"error":"INVALID_REQUEST"}', "application/json")
+            return
+        self.live_proxy(action, self.rfile.read(size))
+
     def do_GET(self) -> None:
         url = urlsplit(self.path)
+        if url.path == "/api/live/status":
+            self.live_proxy("status")
+            return
         assets = {
             "/": ("index.html", "text/html; charset=utf-8"),
             "/app.js": ("app.js", "text/javascript; charset=utf-8"),

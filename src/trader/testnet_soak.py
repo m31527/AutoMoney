@@ -109,9 +109,68 @@ def recover_empty_observation(
     switch.resume()
 
 
+def recover_pending_observation(
+    adapter: BinanceSpotAdapter, db: Any, switch: KillSwitch, state: dict[str, Any]
+) -> None:
+    """Reconcile only the persisted intent. Never submit or silently erase a fault."""
+    import copy
+
+    if (
+        not switch.active
+        or Repository(db).safety_state().reason != "SOAK_REVIEW_REQUIRED"
+        or state.get("error") != "AmbiguousOrder"
+        or not state.get("pending")
+        or adapter.journal is None
+        or adapter.journal.expected_request(state["pending"]) is None
+    ):
+        raise ValueError("RECOVERY_REQUIRES_MANUAL_REVIEW")
+    result = adapter.reconcile("BTCUSDT", state["pending"])
+    candidate = copy.deepcopy(state)
+    apply_fill(candidate, result)
+    account = adapter.get_account()
+    funds = {b.asset: b.free + b.locked for b in account.balances}
+    if (
+        not account.can_trade
+        or adapter.get_open_orders("BTCUSDT")
+        or funds.get("BTC", D(0)) != D(candidate["base_btc"]) + D(candidate["btc"])
+        or funds.get("USDT", D(0)) != D(candidate["base_cash"]) + D(candidate["cash"]) - CAPITAL
+    ):
+        raise ValueError("RECOVERY_ACCOUNT_MISMATCH")
+    candidate["orders"] += 1
+    # Commit accounting while still stopped. A crash cannot apply the fill twice.
+    candidate["status"] = "RECONCILED_STOPPED"
+    with db:
+        db.execute("UPDATE soak_state SET payload=? WHERE id=1", (encode(candidate),))
+        db.execute(
+            "INSERT INTO soak_events(payload) VALUES (?)",
+            (
+                encode(
+                    {
+                        "event": "FILL",
+                        "result": asdict(result),
+                        "at": time.time(),
+                        "recovered": True,
+                    }
+                ),
+            ),
+        )
+    state.clear()
+    state.update(candidate)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("run", "status", "stop", "recover-read-failure"))
+    parser.add_argument(
+        "action",
+        choices=(
+            "run",
+            "status",
+            "stop",
+            "recover-read-failure",
+            "recover-pending",
+            "resume-reconciled",
+        ),
+    )
     parser.add_argument("--data", type=Path, default=Path("/soak"))
     args = parser.parse_args()
     if (
@@ -153,6 +212,45 @@ def main() -> None:
                 db.execute("INSERT OR REPLACE INTO soak_state VALUES (1,?)", (encode(state),))
                 db.execute("INSERT INTO soak_events(payload) VALUES (?)", (encode(event),))
             print(encode(event), flush=True)
+
+        if args.action == "recover-pending":
+            if state is None:
+                raise SystemExit("NO_STATE")
+            recover_pending_observation(adapter, db, switch, state)
+            print("RECONCILED_STOPPED; inspect then resume-reconciled", flush=True)
+            return
+        if args.action == "resume-reconciled":
+            if (
+                state is None
+                or state.get("status") != "RECONCILED_STOPPED"
+                or state.get("pending")
+                or not switch.active
+                or Repository(db).safety_state().reason != "SOAK_REVIEW_REQUIRED"
+            ):
+                raise SystemExit("RECOVERY_REQUIRES_MANUAL_REVIEW")
+            funds = {b.asset: b.free + b.locked for b in adapter.get_balances()}
+            if (
+                adapter.get_open_orders("BTCUSDT")
+                or funds.get("BTC", D(0)) != D(state["base_btc"]) + D(state["btc"])
+                or funds.get("USDT", D(0)) != D(state["base_cash"]) + D(state["cash"]) - CAPITAL
+            ):
+                raise SystemExit("RECOVERY_ACCOUNT_MISMATCH")
+            # Historical fault and fills stay visible. A new clean observation window.
+            old = dict(state)
+            state.update(
+                status="RUNNING",
+                policy_started=time.time(),
+                deadline=time.time() + 48 * 3600,
+                cycles=0,
+                max_gap_seconds=0,
+            )
+            state.pop("last_cycle", None)
+            state.pop("error", None)
+            state.pop("diagnostic", None)
+            save({"event": "RECOVERY_VERIFIED", "at": time.time(), "previous": old})
+            switch.resume()
+            print("RESUMED; start worker to continue", flush=True)
+            return
 
         if args.action == "recover-read-failure":
             if state is None:

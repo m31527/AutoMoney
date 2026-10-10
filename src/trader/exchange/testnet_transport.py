@@ -15,6 +15,8 @@ from trader.exchange.transport import NoRedirect, Response
 
 class TestnetTransport:
     supports_mutations = True
+    origin = "testnet.binance.vision"
+    extra_get: set[str] = set()
 
     def request(
         self, method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float
@@ -33,9 +35,10 @@ class TestnetTransport:
             },
             "POST": {"/api/v3/order"},
         }
+        allowed["GET"] |= self.extra_get
         if (
             target.scheme != "https"
-            or target.netloc != "testnet.binance.vision"
+            or target.netloc != self.origin
             or target.fragment
             or target.path not in allowed.get(method, set())
         ):

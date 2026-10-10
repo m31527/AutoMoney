@@ -20,3 +20,5 @@ artifacts/
 
 config/openteddy.env
 config/testnet.env
+
+/config/live.env

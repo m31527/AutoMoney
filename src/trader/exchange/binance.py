@@ -77,7 +77,9 @@ class BinanceSpotAdapter:
             raise ValueError("Unsupported symbol whitelist")
         if mode == TradingMode.PAPER and credentials is not None:
             raise ValueError("PAPER public market data must not receive credentials")
-        self.mode = mode
+        self._base_url = TESTNET_URL if mode == TradingMode.TESTNET else PUBLIC_URL
+        self._private_modes = (TradingMode.TESTNET,)
+        self.mode: TradingMode = mode
         self._credentials = credentials
         self.transport = transport or ReadOnlyHTTPTransport()
         self.journal = journal
@@ -132,7 +134,7 @@ class BinanceSpotAdapter:
         if method != "GET" and not self.transport.supports_mutations:
             raise TradingDisabled()
         if signed:
-            if self._credentials is None or self.mode != TradingMode.TESTNET:
+            if self._credentials is None or self.mode not in self._private_modes:
                 raise AuthenticationError()
             if self._synced_at is None or self.monotonic() - self._synced_at > 60:
                 self.sync_time()
@@ -152,7 +154,7 @@ class BinanceSpotAdapter:
                 ).hexdigest()
                 query += "&signature=" + signature
                 headers["X-MBX-APIKEY"] = self._credentials.api_key
-            url = (TESTNET_URL if self.mode == TradingMode.TESTNET else PUBLIC_URL) + path
+            url = self._base_url + path
             body = None
             if method == "GET":
                 if query:
@@ -330,9 +332,14 @@ class BinanceSpotAdapter:
             fills = (
                 self.get_fills(symbol, order.exchange_order_id) if order.executed_quantity else ()
             )
-        except ExchangeError:
+        except ExchangeError as cause:
             self._trip("RECONCILIATION_REQUIRED")
-            raise AmbiguousOrder() from None
+            error = AmbiguousOrder()
+            # Preserve only allowlisted metadata, never signed URLs or raw responses.
+            for name in ("path", "http_status", "exchange_code"):
+                if hasattr(cause, name):
+                    setattr(error, name, getattr(cause, name))
+            raise error from None
         total_quantity = sum((fill.quantity for fill in fills), Decimal(0))
         total_quote = sum((fill.quote_quantity for fill in fills), Decimal(0))
         complete = (
@@ -364,7 +371,7 @@ class BinanceSpotAdapter:
         # explicitly inject its origin-restricted Testnet transport.
         if (
             not self.transport.supports_mutations
-            or self.mode != TradingMode.TESTNET
+            or self.mode not in self._private_modes
             or self.journal is None
             or self.kill_switch is None
         ):

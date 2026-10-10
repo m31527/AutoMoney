@@ -39,11 +39,15 @@ def assess(state: dict[str, Any], events: list[dict[str, Any]], stopped: bool) -
         "live_status": "BLOCKED",
         "live_blockers": [
             "PRODUCTION_KEY_PERMISSIONS_NOT_VERIFIED",
-            "PRODUCTION_EXECUTION_NOT_IMPLEMENTED",
-            "MANUAL_RELEASE_NOT_IMPLEMENTED",
+            "AUTHENTICATED_PER_ORDER_APPROVAL_REQUIRED",
             "STRATEGY_PERFORMANCE_REVIEW_REQUIRED",
         ],
         "policy": asdict(INITIAL_POLICY),
+        "software_capabilities": {
+            "production_preflight": True,
+            "production_order_entry": True,
+            "authenticated_manual_release": True,
+        },
         "orders_submitted": 0,
     }
 

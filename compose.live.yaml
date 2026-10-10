@@ -1,0 +1,19 @@
+# Merge with the existing dashboard compose stack; no public control port.
+services:
+  live-control:
+    build: .
+    entrypoint: ["python", "-m", "trader.live_server"]
+    user: "${LIVE_UID:-1000}:${LIVE_GID:-1000}"
+    env_file: config/live.env
+    volumes:
+      - ./data/live:/live
+      - ./data/testnet-soak:/soak:ro
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  dashboard:
+    environment:
+      LIVE_CONTROL_URL: http://live-control:8090
