@@ -58,6 +58,71 @@ class LiveTests(unittest.TestCase):
         self.quantity.start()
         self.addCleanup(self.quantity.stop)
 
+    def test_ip_change_latches_stop_and_cancels_preview(self):
+        with (
+            patch.dict(os.environ, {"LIVE_IP_GUARD": "true"}),
+            patch("trader.live_control.public_ip", return_value="8.8.8.8"),
+        ):
+            self.control.check_ip(accept=True)
+            self.control.state["proposal"] = {"id": "old"}
+            with patch("trader.live_control.public_ip", return_value="1.1.1.1"):
+                with self.assertRaisesRegex(ValueError, "EGRESS_IP_REVIEW_REQUIRED"):
+                    self.control.check_release()
+            self.assertTrue(self.control.switch.active)
+            self.assertIsNone(self.control.state["proposal"])
+            self.control.check_ip()
+            self.assertTrue(self.control.switch.active)
+            self.adapter.place_order.assert_not_called()
+
+    def test_ip_failure_stops_and_resume_requires_permissions(self):
+        with (
+            patch.dict(os.environ, {"LIVE_IP_GUARD": "true"}),
+            patch("trader.live_control.public_ip", side_effect=TimeoutError),
+        ):
+            with self.assertRaisesRegex(ValueError, "EGRESS_IP_UNAVAILABLE"):
+                self.control.check_ip()
+        with (
+            patch.dict(os.environ, {"LIVE_IP_GUARD": "true"}),
+            patch("trader.live_control.public_ip", return_value="8.8.8.8"),
+        ):
+            self.adapter.check_permissions.side_effect = ValueError("UNSAFE")
+            with self.assertRaisesRegex(ValueError, "UNSAFE"):
+                self.control.dispatch("resume", {"confirmation": "我確認已核對帳本並解除停機"})
+            self.assertTrue(self.control.switch.active)
+            self.adapter.check_permissions.side_effect = None
+            self.control.dispatch("resume", {"confirmation": "我確認已核對帳本並解除停機"})
+            self.assertFalse(self.control.switch.active)
+            self.assertEqual(self.control.state["egress"]["approved_ip"], "8.8.8.8")
+            self.adapter.place_order.assert_not_called()
+
+    def test_ip_stop_survives_restart_and_pending_cannot_resume(self):
+        with (
+            patch.dict(os.environ, {"LIVE_IP_GUARD": "true"}),
+            patch("trader.live_control.public_ip", return_value="8.8.8.8"),
+        ):
+            with self.assertRaises(ValueError):
+                self.control.check_ip()
+            restarted = LiveControl(Path(self.temp.name), Path(self.temp.name) / "soak")
+            try:
+                self.assertTrue(restarted.switch.active)
+                self.assertEqual(restarted.state["egress"]["current_ip"], "8.8.8.8")
+                restarted.state["pending"] = {"id": "unknown"}
+                with self.assertRaisesRegex(ValueError, "PENDING_ORDER"):
+                    restarted.dispatch("resume", {"confirmation": "我確認已核對帳本並解除停機"})
+            finally:
+                restarted.db.close()
+
+    def test_ip_changes_during_resume_remains_stopped(self):
+        self.control.switch.kill()
+        with (
+            patch.dict(os.environ, {"LIVE_IP_GUARD": "true"}),
+            patch("trader.live_control.public_ip", side_effect=["8.8.8.8", "1.1.1.1"]),
+        ):
+            with self.assertRaisesRegex(ValueError, "EGRESS_IP_REVIEW_REQUIRED"):
+                self.control.dispatch("resume", {"confirmation": "我確認已核對帳本並解除停機"})
+            self.assertTrue(self.control.switch.active)
+            self.adapter.place_order.assert_not_called()
+
     def prepare(self):
         return self.control.prepare("BUY", "11")
 

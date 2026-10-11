@@ -5,6 +5,8 @@ services:
     entrypoint: ["python", "-m", "trader.live_server"]
     user: "${LIVE_UID:-1000}:${LIVE_GID:-1000}"
     env_file: config/live.env
+    environment:
+      LIVE_IP_GUARD: "true"
     volumes:
       - ./data/live:/live
       - ./data/testnet-soak:/soak:ro

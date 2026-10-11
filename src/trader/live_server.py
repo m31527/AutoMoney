@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import sqlite3
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -74,7 +75,18 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(409, {"error": message})
 
 
+def monitor_ip() -> None:
+    while True:
+        try:
+            operate(Path("/live"), Path("/soak"), "ip-check", {})
+        except Exception:
+            # Check failures latch the persistent stop; never recover or resend here.
+            pass
+        threading.Event().wait(60)
+
+
 def main() -> None:
+    threading.Thread(target=monitor_ip, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", 8090), Handler).serve_forever()
 
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from trader.egress import public_ip
 from trader.exchange.models import Credentials
 from trader.exchange.production import ProductionAdapter, ProductionTransport
 from trader.execution.filters import market_quantity
@@ -86,10 +87,39 @@ class LiveControl:
                 ),
             )
 
+    def check_ip(self, *, accept: bool = False) -> None:
+        if os.getenv("LIVE_IP_GUARD") != "true":
+            return
+        guard = self.state.setdefault("egress", {})
+        try:
+            current = public_ip()
+        except Exception:
+            guard.update(checked_at=time.time(), status="UNAVAILABLE")
+            self.switch.trip("EGRESS_IP_UNAVAILABLE")
+            self.state["proposal"] = None
+            self.save("EGRESS_IP_UNAVAILABLE")
+            raise ValueError("EGRESS_IP_UNAVAILABLE") from None
+        guard.update(current_ip=current, checked_at=time.time())
+        if accept:
+            guard.update(approved_ip=current, status="VERIFIED")
+        elif current != guard.get("approved_ip"):
+            guard["status"] = "REVIEW_REQUIRED"
+            self.switch.trip("EGRESS_IP_REVIEW_REQUIRED")
+            self.state["proposal"] = None
+            self.save("EGRESS_IP_REVIEW_REQUIRED")
+            raise ValueError("EGRESS_IP_REVIEW_REQUIRED")
+        else:
+            guard["status"] = "VERIFIED"
+        self.save("EGRESS_IP_CHECKED")
+
     def status(self) -> dict[str, Any]:
         evidence = read_report(self.soak)
         return {
             "environment": "PRODUCTION",
+            "egress": {
+                **self.state.get("egress", {}),
+                "enabled": os.getenv("LIVE_IP_GUARD") == "true",
+            },
             "execution": "MANUAL_PER_ORDER",
             "credentials_configured": self.adapter is not None,
             "execution_enabled": os.getenv("ENABLE_LIVE_TRADING") == "true",
@@ -161,6 +191,7 @@ class LiveControl:
         return {"bid": ticker.bid, "ask": ticker.ask, "ticker": ticker}
 
     def check_release(self) -> None:
+        self.check_ip()
         if self.switch.active:
             raise ValueError("PERSISTENT_STOP")
         if self.state.get("pending"):
@@ -309,6 +340,9 @@ class LiveControl:
         return self.status()
 
     def dispatch(self, action: str, body: dict[str, Any]) -> dict[str, Any]:
+        if action == "ip-check":
+            self.check_ip()
+            return self.status()
         if action == "status":
             return self.status()
         if action == "preflight":
@@ -334,7 +368,13 @@ class LiveControl:
                 raise ValueError("RESUME_CONFIRMATION_REQUIRED")
             if self.state.get("pending"):
                 raise ValueError("PENDING_ORDER_RECONCILE_REQUIRED")
+            # Verify the same egress before and after exchange permission/account checks.
+            before = public_ip() if os.getenv("LIVE_IP_GUARD") == "true" else None
             self.preflight()
+            self.check_ip(accept=True)
+            if before is not None and before != self.state["egress"]["current_ip"]:
+                self.switch.trip("EGRESS_IP_CHANGED_DURING_REVIEW")
+                raise ValueError("EGRESS_IP_REVIEW_REQUIRED")
             self.switch.resume()
             self.state.update(proposal=None, status="READY_FOR_REVIEW")
             self.save("MANUAL_RESUME")
