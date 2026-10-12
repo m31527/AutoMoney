@@ -14,6 +14,7 @@ from typing import Any
 
 from trader.config import TradingMode
 from trader.exchange.binance import BinanceSpotAdapter
+from trader.exchange.errors import NetworkError, TemporaryError
 from trader.exchange.models import Credentials, Reconciliation
 from trader.exchange.testnet_transport import TestnetTransport
 from trader.execution.filters import market_quantity
@@ -158,6 +159,61 @@ def recover_pending_observation(
     state.update(candidate)
 
 
+def record_read_retry(state: dict[str, Any], switch: KillSwitch, error: Exception) -> int:
+    """Only retry a fresh read-only cycle with no outstanding submission."""
+    if (
+        not isinstance(error, (NetworkError, TemporaryError))
+        or state.get("pending")
+        or switch.active
+    ):
+        raise error
+    count = int(state.get("consecutive_read_failures", 0)) + 1
+    state["consecutive_read_failures"] = count
+    if count >= 3:
+        raise error
+    return 30 * count
+
+
+def recover_transient_observation(
+    adapter: BinanceSpotAdapter, db: Any, switch: KillSwitch, state: dict[str, Any]
+) -> None:
+    """Explicit stopped-run repair; preserve funds, fills, and fault evidence."""
+    if (
+        not switch.active
+        or Repository(db).safety_state().reason != "SOAK_REVIEW_REQUIRED"
+        or state.get("status") != "BLOCKED"
+        or state.get("error") not in ("TemporaryError", "NetworkError")
+        or state.get("pending")
+    ):
+        raise ValueError("RECOVERY_REQUIRES_MANUAL_REVIEW")
+    # Every submission must already have an accounted fill, including old windows.
+    submitted = {r[0] for r in db.execute("SELECT client_order_id FROM exchange_submissions")}
+    accounted = set()
+    for row in db.execute("SELECT payload FROM soak_events"):
+        event = json.loads(row[0])
+        if event.get("event") == "FILL":
+            accounted.add(event["result"]["order"]["client_order_id"])
+    if submitted != accounted or len(accounted) != state.get("orders"):
+        raise ValueError("RECOVERY_UNACCOUNTED_SUBMISSION")
+    account = adapter.get_account()
+    funds = {b.asset: b.free + b.locked for b in account.balances}
+    if (
+        not account.can_trade
+        or adapter.get_open_orders("BTCUSDT")
+        or any(b.locked for b in account.balances if b.asset in ("BTC", "USDT"))
+        or funds.get("BTC", D(0)) != D(state["base_btc"]) + D(state["btc"])
+        or funds.get("USDT", D(0)) != D(state["base_cash"]) + D(state["cash"]) - CAPITAL
+    ):
+        raise ValueError("RECOVERY_ACCOUNT_MISMATCH")
+    state["status"] = "RECONCILED_STOPPED"
+    with db:
+        db.execute("UPDATE soak_state SET payload=? WHERE id=1", (encode(state),))
+        db.execute(
+            "INSERT INTO soak_events(payload) VALUES (?)",
+            (encode({"event": "TRANSIENT_RECOVERY_CHECKED", "at": time.time()}),),
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -168,6 +224,7 @@ def main() -> None:
             "stop",
             "recover-read-failure",
             "recover-pending",
+            "recover-transient",
             "resume-reconciled",
         ),
     )
@@ -213,6 +270,12 @@ def main() -> None:
                 db.execute("INSERT INTO soak_events(payload) VALUES (?)", (encode(event),))
             print(encode(event), flush=True)
 
+        if args.action == "recover-transient":
+            if state is None:
+                raise SystemExit("NO_STATE")
+            recover_transient_observation(adapter, db, switch, state)
+            print("RECONCILED_STOPPED; inspect then resume-reconciled", flush=True)
+            return
         if args.action == "recover-pending":
             if state is None:
                 raise SystemExit("NO_STATE")
@@ -243,6 +306,7 @@ def main() -> None:
                 deadline=time.time() + 48 * 3600,
                 cycles=0,
                 max_gap_seconds=0,
+                consecutive_read_failures=0,
             )
             state.pop("last_cycle", None)
             state.pop("error", None)
@@ -263,6 +327,7 @@ def main() -> None:
                 deadline=time.time() + 48 * 3600,
                 cycles=0,
                 max_gap_seconds=0,
+                consecutive_read_failures=0,
             )
             state.pop("error", None)
             state.pop("last_cycle", None)
@@ -318,139 +383,159 @@ def main() -> None:
             while state["pending"] or time.time() < state["deadline"]:
                 if switch.active:
                     raise ValueError("PERSISTENT_STOP")
-                # Recover pending submission before any new strategy decision.
-                if state["pending"]:
-                    cid = state["pending"]
-                    if adapter.journal.expected_request(cid) is None:
-                        raise ValueError("INTENT_NOT_SENT_REQUIRES_REVIEW")
-                    result = adapter.reconcile("BTCUSDT", cid)
-                    apply_fill(state, result)
-                    state["orders"] += 1
-                    save({"event": "FILL", "result": asdict(result), "at": time.time()})
-                if time.time() >= state["deadline"]:
-                    break
-                funds = {b.asset: b.free + b.locked for b in adapter.get_balances()}
-                if (
-                    funds.get("BTC", D(0)) != D(state["base_btc"]) + D(state["btc"])
-                    or funds.get("USDT", D(0)) != D(state["base_cash"]) + D(state["cash"]) - CAPITAL
-                ):
-                    raise ValueError("ACCOUNT_DRIFT")
-                if adapter.get_open_orders("BTCUSDT"):
-                    raise ValueError("UNEXPECTED_OPEN_ORDER")
-                market = collect_market(public, "BTCUSDT", limit=30)
-                now = datetime.now(UTC)
-                ticker = adapter.get_ticker("BTCUSDT")
-                if not 0 <= (datetime.now(UTC) - ticker.timestamp).total_seconds() <= 60:
-                    raise ValueError("STALE_TESTNET_PRICE")
-                equity = D(state["cash"]) + D(state["btc"]) * ticker.bid
-                day = now.date().isoformat()
-                if state["day"] != day:
-                    state.update(day=day, opening_equity=str(equity), loss_latched=False)
-                if equity <= CAPITAL - INITIAL_POLICY.cumulative_loss:
-                    state["cumulative_loss_latched"] = True
-                state["times"] = [
-                    t for t in state["times"] if datetime.fromtimestamp(t, UTC).date() == now.date()
-                ]
-                if (
-                    equity <= D(state["opening_equity"]) - INITIAL_POLICY.daily_loss
-                    or equity <= CAPITAL - INITIAL_POLICY.cumulative_loss
-                ):
-                    state["loss_latched"] = True
-                m = market.ticker
-                snap = MarketSnapshot(
-                    "BTCUSDT",
-                    now,
-                    m.last_price,
-                    m.bid,
-                    m.ask,
-                    m.spread,
-                    market.candles_1m,
-                    market.candles_5m,
-                    market.candles_15m,
-                    market.candles_1h,
-                    m.volume_24h,
-                    D(state["btc"]),
-                    D(state["cash"]),
-                    D(0),
-                    D(0),
-                    D(0),
-                    len(state["times"]),
-                )
-                strategy_result = HourlyTrendStrategy().propose(snap, now)
-                proposal = strategy_result.proposal
-                if proposal.action != Action.HOLD:
-                    proposal = replace(
-                        proposal, requested_notional_usd=min(ORDER, proposal.requested_notional_usd)
-                    )
-                reason = guard(
-                    state,
-                    proposal.action,
-                    proposal.requested_notional_usd,
-                    ticker.bid,
-                    ticker.ask,
-                    strategy_result.expected_edge_bps,
-                    now.timestamp(),
-                )
-                if abs(ticker.last_price / m.last_price - 1) > D(".01"):
-                    reason = "TESTNET_PRICE_DIVERGENCE"
-                previous_cycle = state.get("last_cycle")
-                if previous_cycle:
-                    gap = (now - datetime.fromisoformat(previous_cycle)).total_seconds()
-                    state["max_gap_seconds"] = max(state.get("max_gap_seconds", 0), gap)
-                state["cycles"] += 1
-                state["equity"] = str(equity)
-                state["last_cycle"] = now.isoformat()
-                save(
-                    {
-                        "event": "DECISION",
-                        "at": now.isoformat(),
-                        "proposal": asdict(proposal),
-                        "edge_bps": strategy_result.expected_edge_bps,
-                        "reason": reason,
-                        "equity": equity,
-                    }
-                )
-                if reason is None:
-                    metadata = adapter.get_exchange_info("BTCUSDT")
-                    average = adapter.get_average_price("BTCUSDT")
+                try:
+                    # Recover pending submission before any new strategy decision.
+                    if state["pending"]:
+                        cid = state["pending"]
+                        if adapter.journal.expected_request(cid) is None:
+                            raise ValueError("INTENT_NOT_SENT_REQUIRES_REVIEW")
+                        result = adapter.reconcile("BTCUSDT", cid)
+                        apply_fill(state, result)
+                        state["orders"] += 1
+                        save({"event": "FILL", "result": asdict(result), "at": time.time()})
+                    if time.time() >= state["deadline"]:
+                        break
+                    funds = {b.asset: b.free + b.locked for b in adapter.get_balances()}
+                    if (
+                        funds.get("BTC", D(0)) != D(state["base_btc"]) + D(state["btc"])
+                        or funds.get("USDT", D(0))
+                        != D(state["base_cash"]) + D(state["cash"]) - CAPITAL
+                    ):
+                        raise ValueError("ACCOUNT_DRIFT")
+                    if adapter.get_open_orders("BTCUSDT"):
+                        raise ValueError("UNEXPECTED_OPEN_ORDER")
+                    market = collect_market(public, "BTCUSDT", limit=30)
+                    now = datetime.now(UTC)
                     ticker = adapter.get_ticker("BTCUSDT")
                     if not 0 <= (datetime.now(UTC) - ticker.timestamp).total_seconds() <= 60:
                         raise ValueError("STALE_TESTNET_PRICE")
-                    repeated_guard = guard(
+                    equity = D(state["cash"]) + D(state["btc"]) * ticker.bid
+                    day = now.date().isoformat()
+                    if state["day"] != day:
+                        state.update(day=day, opening_equity=str(equity), loss_latched=False)
+                    if equity <= CAPITAL - INITIAL_POLICY.cumulative_loss:
+                        state["cumulative_loss_latched"] = True
+                    state["times"] = [
+                        t
+                        for t in state["times"]
+                        if datetime.fromtimestamp(t, UTC).date() == now.date()
+                    ]
+                    if (
+                        equity <= D(state["opening_equity"]) - INITIAL_POLICY.daily_loss
+                        or equity <= CAPITAL - INITIAL_POLICY.cumulative_loss
+                    ):
+                        state["loss_latched"] = True
+                    m = market.ticker
+                    snap = MarketSnapshot(
+                        "BTCUSDT",
+                        now,
+                        m.last_price,
+                        m.bid,
+                        m.ask,
+                        m.spread,
+                        market.candles_1m,
+                        market.candles_5m,
+                        market.candles_15m,
+                        market.candles_1h,
+                        m.volume_24h,
+                        D(state["btc"]),
+                        D(state["cash"]),
+                        D(0),
+                        D(0),
+                        D(0),
+                        len(state["times"]),
+                    )
+                    strategy_result = HourlyTrendStrategy().propose(snap, now)
+                    proposal = strategy_result.proposal
+                    if proposal.action != Action.HOLD:
+                        proposal = replace(
+                            proposal,
+                            requested_notional_usd=min(ORDER, proposal.requested_notional_usd),
+                        )
+                    reason = guard(
                         state,
                         proposal.action,
                         proposal.requested_notional_usd,
                         ticker.bid,
                         ticker.ask,
                         strategy_result.expected_edge_bps,
-                        time.time(),
+                        now.timestamp(),
                     )
-                    if repeated_guard:
-                        raise ValueError("PREFLIGHT_CHANGED")
-                    maximum = proposal.requested_notional_usd / (ticker.ask * D("1.002"))
-                    if proposal.action == Action.SELL:
-                        maximum = min(maximum, D(state["btc"]))
-                    quantity = market_quantity(
-                        maximum, metadata, ticker, average, now=datetime.now(UTC), max_age=60
-                    )
-                    cid = (
-                        "soak_"
-                        + hashlib.sha256(
-                            f"{state['started']}:{state['cycles']}".encode()
-                        ).hexdigest()[:28]
-                    )
-                    state["pending"] = cid
+                    if abs(ticker.last_price / m.last_price - 1) > D(".01"):
+                        reason = "TESTNET_PRICE_DIVERGENCE"
+                    previous_cycle = state.get("last_cycle")
+                    if previous_cycle:
+                        gap = (now - datetime.fromisoformat(previous_cycle)).total_seconds()
+                        state["max_gap_seconds"] = max(state.get("max_gap_seconds", 0), gap)
+                    state["cycles"] += 1
+                    state["equity"] = str(equity)
+                    state["last_cycle"] = now.isoformat()
                     save(
                         {
-                            "event": "INTENT",
-                            "client_id": cid,
-                            "side": proposal.action,
-                            "quantity": quantity,
+                            "event": "DECISION",
+                            "at": now.isoformat(),
+                            "proposal": asdict(proposal),
+                            "edge_bps": strategy_result.expected_edge_bps,
+                            "reason": reason,
+                            "equity": equity,
                         }
                     )
-                    adapter.place_order("BTCUSDT", proposal.action.value, quantity, cid)
+                    if reason is None:
+                        metadata = adapter.get_exchange_info("BTCUSDT")
+                        average = adapter.get_average_price("BTCUSDT")
+                        ticker = adapter.get_ticker("BTCUSDT")
+                        if not 0 <= (datetime.now(UTC) - ticker.timestamp).total_seconds() <= 60:
+                            raise ValueError("STALE_TESTNET_PRICE")
+                        repeated_guard = guard(
+                            state,
+                            proposal.action,
+                            proposal.requested_notional_usd,
+                            ticker.bid,
+                            ticker.ask,
+                            strategy_result.expected_edge_bps,
+                            time.time(),
+                        )
+                        if repeated_guard:
+                            raise ValueError("PREFLIGHT_CHANGED")
+                        maximum = proposal.requested_notional_usd / (ticker.ask * D("1.002"))
+                        if proposal.action == Action.SELL:
+                            maximum = min(maximum, D(state["btc"]))
+                        quantity = market_quantity(
+                            maximum, metadata, ticker, average, now=datetime.now(UTC), max_age=60
+                        )
+                        cid = (
+                            "soak_"
+                            + hashlib.sha256(
+                                f"{state['started']}:{state['cycles']}".encode()
+                            ).hexdigest()[:28]
+                        )
+                        state["pending"] = cid
+                        save(
+                            {
+                                "event": "INTENT",
+                                "client_id": cid,
+                                "side": proposal.action,
+                                "quantity": quantity,
+                            }
+                        )
+                        state["consecutive_read_failures"] = 0
+                        adapter.place_order("BTCUSDT", proposal.action.value, quantity, cid)
+                        continue
+                    state["consecutive_read_failures"] = 0
+                    time.sleep(300)
+                except (NetworkError, TemporaryError) as error:
+                    delay = record_read_retry(state, switch, error)
+                    save(
+                        {
+                            "event": "READ_RETRY",
+                            "at": time.time(),
+                            "error": error.code,
+                            "attempt": state["consecutive_read_failures"],
+                            "delay_seconds": delay,
+                        }
+                    )
+                    time.sleep(delay)
                     continue
-                time.sleep(300)
             state["status"] = "OBSERVATION_COMPLETE_REVIEW_REQUIRED"
             save({"event": "WINDOW_ENDED", "holdings_btc": state["btc"]})
         except Exception as error:

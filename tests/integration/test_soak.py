@@ -194,3 +194,89 @@ class SoakTests(unittest.TestCase):
             recover_empty_observation(adapter, db, switch, s)
         switch.resume.assert_called_once()
         adapter.place_order.assert_not_called()
+
+
+class TransientReadTests(unittest.TestCase):
+    def test_retry_budget_and_pending_stop_are_not_bypassed(self):
+        from unittest.mock import MagicMock
+
+        from trader.exchange.errors import AuthenticationError, NetworkError, TemporaryError
+        from trader.testnet_soak import record_read_retry
+
+        switch = MagicMock()
+        switch.active = False
+        state = {"pending": None}
+        self.assertEqual(record_read_retry(state, switch, NetworkError()), 30)
+        self.assertEqual(record_read_retry(state, switch, TemporaryError()), 60)
+        with self.assertRaises(TemporaryError):
+            record_read_retry(state, switch, TemporaryError())
+        for state, active, error in (
+            ({"pending": "sent"}, False, NetworkError()),
+            ({"pending": None}, True, NetworkError()),
+            ({"pending": None}, False, AuthenticationError()),
+        ):
+            switch.active = active
+            with self.assertRaises(type(error)):
+                record_read_retry(state, switch, error)
+
+    def test_recovery_preserves_history_and_requires_accounted_submissions(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import MagicMock
+
+        from trader.exchange.models import Balance
+        from trader.safety.kill_switch import KillSwitch
+        from trader.storage.db import connect
+        from trader.storage.repository import Repository, encode
+        from trader.testnet_soak import recover_transient_observation
+
+        with tempfile.TemporaryDirectory() as folder:
+            db = connect(Path(folder) / "soak.db")
+            self.addCleanup(db.close)
+            db.execute("CREATE TABLE soak_state(id INTEGER PRIMARY KEY,payload TEXT)")
+            db.execute("CREATE TABLE soak_events(id INTEGER PRIMARY KEY,payload TEXT)")
+            state = dict(
+                status="BLOCKED",
+                error="TemporaryError",
+                pending=None,
+                orders=1,
+                cash="49.95",
+                btc=".005",
+                base_cash="1000",
+                base_btc="0",
+                cycles=3,
+            )
+            db.execute("INSERT INTO soak_state VALUES(1,?)", (encode(state),))
+            db.execute("INSERT INTO exchange_submissions VALUES(?,?,?)", ("buy", "{}", "now"))
+            db.commit()
+            switch = KillSwitch(Repository(db))
+            switch.trip("SOAK_REVIEW_REQUIRED")
+            adapter = MagicMock()
+            adapter.get_account.return_value.can_trade = True
+            adapter.get_account.return_value.balances = (
+                Balance("USDT", D("949.95"), D(0)),
+                Balance("BTC", D(".005"), D(0)),
+            )
+            adapter.get_open_orders.return_value = ()
+            with self.assertRaisesRegex(ValueError, "UNACCOUNTED"):
+                recover_transient_observation(adapter, db, switch, state)
+            db.execute(
+                "INSERT INTO soak_events(payload) VALUES(?)",
+                (encode({"event": "FILL", "result": {"order": {"client_order_id": "buy"}}}),),
+            )
+            db.commit()
+            adapter.get_open_orders.return_value = ("open",)
+            with self.assertRaisesRegex(ValueError, "ACCOUNT_MISMATCH"):
+                recover_transient_observation(adapter, db, switch, state)
+            adapter.get_open_orders.return_value = ()
+            recover_transient_observation(adapter, db, switch, state)
+            self.assertTrue(switch.active)
+            self.assertEqual(state["status"], "RECONCILED_STOPPED")
+            self.assertEqual(state["orders"], 1)
+            self.assertEqual(state["cash"], "49.95")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM soak_events").fetchone()[0], 2)
+            self.assertEqual(
+                json.loads(db.execute("SELECT payload FROM soak_state").fetchone()[0])["cycles"], 3
+            )
+            adapter.place_order.assert_not_called()
