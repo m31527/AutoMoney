@@ -17,7 +17,7 @@ from trader.egress import public_ip
 from trader.exchange.models import Credentials
 from trader.exchange.production import ProductionAdapter, ProductionTransport
 from trader.execution.filters import market_quantity
-from trader.launch_policy import INITIAL_POLICY
+from trader.launch_policy import INITIAL_POLICY, LIVE_POLICY
 from trader.live_readiness import read_report
 from trader.safety.kill_switch import KillSwitch
 from trader.storage.db import connect
@@ -59,17 +59,32 @@ class LiveControl:
             json.loads(row[0])
             if row
             else {
-                "cash": "100",
+                "cash": str(LIVE_POLICY.capital),
                 "btc": "0",
                 "times": [],
                 "last_trade": 0,
                 "pending": None,
                 "orders": 0,
                 "status": "NOT_INITIALIZED",
-                "policy": asdict(INITIAL_POLICY),
+                "policy": asdict(LIVE_POLICY),
                 "loss_latched": False,
             }
         )
+
+        # Only migrate an untouched, unbound ledger. Never rebase an active account.
+        if row and self.state.get("policy") == json.loads(encode(asdict(INITIAL_POLICY))):
+            if (
+                "base_cash" in self.state
+                or self.state.get("orders") != 0
+                or D(self.state.get("btc", "0")) != 0
+                or D(self.state.get("cash", "0")) != INITIAL_POLICY.capital
+                or self.state.get("pending")
+                or self.state.get("proposal")
+            ):
+                self.db.close()
+                raise ValueError("POLICY_MIGRATION_REQUIRES_REVIEW")
+            self.state.update(cash=str(LIVE_POLICY.capital), policy=asdict(LIVE_POLICY))
+            self.save("UNINITIALIZED_BUDGET_CHANGED_TO_EIGHTY")
 
     def save(self, event: str, **details: Any) -> None:
         with self.db:
@@ -125,7 +140,7 @@ class LiveControl:
             "execution_enabled": os.getenv("ENABLE_LIVE_TRADING") == "true",
             "stop_active": self.switch.active,
             "testnet_passed": evidence.get("testnet_status") == "REVIEW_REQUIRED",
-            "policy": asdict(INITIAL_POLICY),
+            "policy": asdict(LIVE_POLICY),
             "state": {
                 k: (
                     None
@@ -156,7 +171,7 @@ class LiveControl:
             raise ValueError("ACCOUNT_FUNDS_LOCKED")
         funds = {b.asset: b.free + b.locked for b in account.balances}
         if "base_cash" not in self.state:
-            if funds.get("USDT", D(0)) < INITIAL_POLICY.capital:
+            if funds.get("USDT", D(0)) < LIVE_POLICY.capital:
                 raise ValueError("INSUFFICIENT_LIVE_FUNDS")
             self.state.update(
                 base_cash=str(funds["USDT"]),
@@ -169,7 +184,7 @@ class LiveControl:
         if (
             funds.get("BTC", D(0)) != D(self.state["base_btc"]) + D(self.state["btc"])
             or funds.get("USDT", D(0))
-            != D(self.state["base_cash"]) + D(self.state["cash"]) - INITIAL_POLICY.capital
+            != D(self.state["base_cash"]) + D(self.state["cash"]) - LIVE_POLICY.capital
         ):
             raise ValueError("ACCOUNT_DRIFT_RECONCILE_REQUIRED")
         ticker = self.adapter.get_ticker("BTCUSDT")
@@ -181,9 +196,9 @@ class LiveControl:
         day = datetime.now(UTC).date().isoformat()
         if self.state.get("day") != day:
             self.state.update(day=day, opening_equity=str(equity), loss_latched=False)
-        if equity <= D(self.state["opening_equity"]) - INITIAL_POLICY.daily_loss:
+        if equity <= D(self.state["opening_equity"]) - LIVE_POLICY.daily_loss:
             self.state["loss_latched"] = True
-        if equity <= INITIAL_POLICY.capital - INITIAL_POLICY.cumulative_loss:
+        if equity <= LIVE_POLICY.capital - LIVE_POLICY.cumulative_loss:
             self.state["cumulative_loss_latched"] = True
         self.state["equity"] = str(equity)
         self.state["last_check"] = time.time()
@@ -196,9 +211,9 @@ class LiveControl:
             raise ValueError("PERSISTENT_STOP")
         if self.state.get("pending"):
             raise ValueError("PENDING_ORDER_RECONCILE_REQUIRED")
-        if self.state["policy"] != json.loads(encode(asdict(INITIAL_POLICY))):
+        if self.state["policy"] != json.loads(encode(asdict(LIVE_POLICY))):
             # In-memory initial policy contains Decimals; serialize both sides.
-            if encode(self.state["policy"]) != encode(asdict(INITIAL_POLICY)):
+            if encode(self.state["policy"]) != encode(asdict(LIVE_POLICY)):
                 raise ValueError("POLICY_CHANGED")
         if read_report(self.soak).get("testnet_status") != "REVIEW_REQUIRED":
             raise ValueError("TESTNET_ACCEPTANCE_NOT_PASSED")
@@ -209,7 +224,7 @@ class LiveControl:
             side not in ("BUY", "SELL")
             or not quantity.is_finite()
             or quantity <= 0
-            or cost > INITIAL_POLICY.order_limit
+            or cost > LIVE_POLICY.order_limit
         ):
             raise ValueError("ORDER_LIMIT")
         if side == "BUY":
@@ -217,7 +232,7 @@ class LiveControl:
                 raise ValueError("LOSS_LIMIT")
             if (
                 cost * D("1.003") > D(self.state["cash"])
-                or (D(self.state["btc"]) + quantity) * ask > INITIAL_POLICY.exposure_limit
+                or (D(self.state["btc"]) + quantity) * ask > LIVE_POLICY.exposure_limit
             ):
                 raise ValueError("BUDGET_LIMIT")
         elif quantity > D(self.state["btc"]):
@@ -230,7 +245,7 @@ class LiveControl:
     def prepare(self, side: str, amount: str) -> dict[str, Any]:
         self.check_release()
         value = D(amount)
-        if not value.is_finite() or not 0 < value <= INITIAL_POLICY.order_limit:
+        if not value.is_finite() or not 0 < value <= LIVE_POLICY.order_limit:
             raise ValueError("ORDER_LIMIT")
         market = self.preflight()
         assert self.adapter is not None
@@ -255,7 +270,7 @@ class LiveControl:
             "ask": str(market["ask"]),
             "expires": time.time() + 120,
             "key_id": self.key_id,
-            "policy_version": INITIAL_POLICY.version,
+            "policy_version": LIVE_POLICY.version,
         }
         self.state["proposal"] = proposal
         self.save("ORDER_PREPARED", proposal=proposal)
@@ -329,7 +344,7 @@ class LiveControl:
         if (
             funds.get("BTC", D(0)) != D(candidate["base_btc"]) + D(candidate["btc"])
             or funds.get("USDT", D(0))
-            != D(candidate["base_cash"]) + D(candidate["cash"]) - INITIAL_POLICY.capital
+            != D(candidate["base_cash"]) + D(candidate["cash"]) - LIVE_POLICY.capital
             or self.adapter.get_open_orders("BTCUSDT")
         ):
             raise ValueError("POST_FILL_ACCOUNT_MISMATCH")

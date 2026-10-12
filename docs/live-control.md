@@ -5,7 +5,7 @@
 ## 使用方式
 
 1. DGX `~/AutoMoney` 執行 `bash scripts/live-control.sh setup`，建立不進 Git、權限 600 的 `config/live.env`。已有檔案不覆蓋。
-2. 在 DGX 編輯 `config/live.env`，填入正式 HMAC API key / secret，不能用 Spot Testnet 金鑰。不要貼到聊天或 commit。正式帳戶需至少 100 USDT 可用資金。
+2. 在 DGX 編輯 `config/live.env`，填入正式 HMAC API key / secret，不能用 Spot Testnet 金鑰。不要貼到聊天或 commit。正式帳戶需至少 80 USDT 可用資金。
 3. 金鑰需開讀取、現貨交易和 IP 限制；關閉提款、內部／通用轉帳、槓桿、合約、選擇權、Portfolio Margin 和 FIX 交易權限。缺欄位或無法核對時拒絕放行。[Binance 權限 API 文件](https://developers.binance.com/en/docs/catalog/core-trading-wallet/api/rest-api/account)。
 4. `ENABLE_LIVE_TRADING=false` 時仍可檢查帳戶。測試網驗收通過且決定真實交易後，才由操作者改為 `true`，執行 `bash scripts/live-control.sh start` 套用。
 5. Mac 終端執行 `ssh -N -L 18080:127.0.0.1:8080 m31527@192.168.50.86` 並保持連線，瀏覽器開 `http://localhost:18080`。LAN HTTP 僅供觀察，頁面阻止透過未加密 LAN 送操作密碼。
@@ -14,7 +14,7 @@
 
 ## 強制限制與適用範圍
 
-- 獨立分配 100 USDT；單筆預估不超過 15、BTC 持倉預估不超過 30 USDT，只交易 BTCUSDT 現貨，不自動加碼。
+- 獨立分配 80 USDT；單筆預估不超過 15、BTC 持倉預估不超過 30 USDT，只交易 BTCUSDT 現貨，不自動加碼。
 - 每日虧損達 2、累計虧損達 5 USDT 停買；每日按 UTC 換日，累計停買不隨換日解除。每次準備／放行重新估值，沒有背景連續風控或自動止損。
 - 每日最多 4 筆，兩筆間隔至少 30 分鐘。只賣本系統買入的 BTC，不使用帳戶既有 BTC。
 - 市價單不保證成交價；15/30 是送單前限額，實際成交可能受滑價影響。
@@ -52,3 +52,5 @@
 可用性會受該服務影響。偵測有間隔，且出口可能依目的地或 IPv6 路由而不同，
 這不能保證幣安看到的 IP 永遠相同，也不能取消已送出的訂單。
 若白名單失效時持有部位，使用幣安官方介面核對並處理。
+
+正式試行採 live-80-v1，本金 80 USDT；Testnet 保留 initial-100-v1 歷史驗收政策。只允許尚未綁定帳戶且無持倉、訂單與預覽的舊正式帳本自動降低預算，已交易帳本須另行人工核對，不重設歷史。

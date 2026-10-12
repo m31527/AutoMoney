@@ -18,3 +18,6 @@ class LaunchPolicy:
 
 
 INITIAL_POLICY = LaunchPolicy()
+
+# Production trial budget; historical Testnet policy and evidence remain unchanged.
+LIVE_POLICY = LaunchPolicy(version="live-80-v1", capital=Decimal("80"))

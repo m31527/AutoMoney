@@ -123,6 +123,40 @@ class LiveTests(unittest.TestCase):
             self.assertTrue(self.control.switch.active)
             self.adapter.place_order.assert_not_called()
 
+    def test_eighty_budget_and_existing_funds_are_separate(self):
+        self.adapter.get_account.return_value = replace(
+            self.adapter.get_account.return_value,
+            balances=(Balance("USDT", D("86.35"), D(0)),),
+        )
+        self.control.preflight()
+        self.assertEqual(self.control.state["cash"], "80")
+        self.assertEqual(self.control.state["base_cash"], "86.35")
+        self.assertEqual(self.control.state["equity"], "80")
+        self.adapter.get_account.return_value = replace(
+            self.adapter.get_account.return_value,
+            balances=(Balance("USDT", D("79.99"), D(0)),),
+        )
+        self.control.state.pop("base_cash")
+        with self.assertRaisesRegex(ValueError, "INSUFFICIENT_LIVE_FUNDS"):
+            self.control.preflight()
+
+    def test_only_untouched_old_budget_can_migrate(self):
+        from dataclasses import asdict
+
+        from trader.launch_policy import INITIAL_POLICY
+
+        self.control.state.update(cash="100", policy=asdict(INITIAL_POLICY))
+        self.control.save("TEST_OLD_POLICY")
+        other = LiveControl(Path(self.temp.name), Path(self.temp.name) / "soak")
+        try:
+            self.assertEqual(other.state["cash"], "80")
+        finally:
+            other.db.close()
+        self.control.state["base_cash"] = "100"
+        self.control.save("TEST_BOUND_POLICY")
+        with self.assertRaisesRegex(ValueError, "POLICY_MIGRATION_REQUIRES_REVIEW"):
+            LiveControl(Path(self.temp.name), Path(self.temp.name) / "soak")
+
     def prepare(self):
         return self.control.prepare("BUY", "11")
 
@@ -208,7 +242,7 @@ class LiveTests(unittest.TestCase):
         p = self.prepare()
         self.filled(p["id"])
         self.control.approve(p["id"], CONFIRMATION, True)
-        self.assertEqual(self.control.state["cash"], "89.99")
+        self.assertEqual(self.control.state["cash"], "69.99")
         self.assertEqual(self.control.state["orders"], 1)
         self.assertIsNone(self.control.state["pending"])
         with self.assertRaises(ValueError):
@@ -246,7 +280,7 @@ class LiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ACCOUNT_MISMATCH"):
             self.control.reconcile()
         self.assertEqual(self.control.state["pending"], p["id"])
-        self.assertEqual(self.control.state["cash"], "100")
+        self.assertEqual(self.control.state["cash"], "80")
 
     def test_key_change_requires_review_and_manual_stop_persists(self):
         self.control.preflight()
