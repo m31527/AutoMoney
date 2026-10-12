@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from trader.egress import public_ip
+from trader.egress import configured_ips, public_ip
 from trader.exchange.models import Credentials
 from trader.exchange.production import ProductionAdapter, ProductionTransport
 from trader.execution.filters import market_quantity
@@ -107,6 +107,7 @@ class LiveControl:
             return
         guard = self.state.setdefault("egress", {})
         try:
+            allowed = configured_ips()
             current = public_ip()
         except Exception:
             guard.update(checked_at=time.time(), status="UNAVAILABLE")
@@ -115,9 +116,10 @@ class LiveControl:
             self.save("EGRESS_IP_UNAVAILABLE")
             raise ValueError("EGRESS_IP_UNAVAILABLE") from None
         guard.update(current_ip=current, checked_at=time.time())
-        if accept:
-            guard.update(approved_ip=current, status="VERIFIED")
-        elif current != guard.get("approved_ip"):
+        approved = guard.get("approved_ips", [guard.get("approved_ip")])
+        if accept and (not allowed or current in allowed):
+            guard.update(approved_ip=current, approved_ips=allowed or [current], status="VERIFIED")
+        elif accept or current not in approved or (allowed and allowed != approved):
             guard["status"] = "REVIEW_REQUIRED"
             self.switch.trip("EGRESS_IP_REVIEW_REQUIRED")
             self.state["proposal"] = None
@@ -387,7 +389,7 @@ class LiveControl:
             before = public_ip() if os.getenv("LIVE_IP_GUARD") == "true" else None
             self.preflight()
             self.check_ip(accept=True)
-            if before is not None and before != self.state["egress"]["current_ip"]:
+            if before is not None and before not in self.state["egress"]["approved_ips"]:
                 self.switch.trip("EGRESS_IP_CHANGED_DURING_REVIEW")
                 raise ValueError("EGRESS_IP_REVIEW_REQUIRED")
             self.switch.resume()

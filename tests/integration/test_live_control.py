@@ -157,6 +157,21 @@ class LiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "POLICY_MIGRATION_REQUIRES_REVIEW"):
             LiveControl(Path(self.temp.name), Path(self.temp.name) / "soak")
 
+    def test_multi_egress_switch_and_unknown_ip(self):
+        with patch.dict(
+            os.environ, {"LIVE_IP_GUARD": "true", "LIVE_APPROVED_EGRESS_IPS": "8.8.8.8,1.1.1.1"}
+        ):
+            with patch("trader.live_control.public_ip", return_value="8.8.8.8"):
+                self.control.check_ip(accept=True)
+            with patch("trader.live_control.public_ip", return_value="1.1.1.1"):
+                self.control.check_ip()
+                self.assertFalse(self.control.switch.active)
+            with patch("trader.live_control.public_ip", return_value="9.9.9.9"):
+                with self.assertRaisesRegex(ValueError, "EGRESS_IP_REVIEW_REQUIRED"):
+                    self.control.check_ip(accept=True)
+                self.assertTrue(self.control.switch.active)
+                self.assertNotIn("9.9.9.9", self.control.state["egress"]["approved_ips"])
+
     def prepare(self):
         return self.control.prepare("BUY", "11")
 
