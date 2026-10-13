@@ -1,0 +1,20 @@
+# Optional only: ordinary live-control.sh start does not start this worker.
+services:
+  live-auto:
+    profiles: [auto-live]
+    build: .
+    entrypoint: ["python", "-m", "trader.live_auto"]
+    command: ["run"]
+    user: "${LIVE_UID:-1000}:${LIVE_GID:-1000}"
+    env_file: config/live.env
+    environment:
+      LIVE_IP_GUARD: "true"
+    volumes:
+      - ./data/live:/live
+      - ./data/testnet-soak:/soak:ro
+    restart: "no"
+    init: true
+    read_only: true
+    tmpfs: /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

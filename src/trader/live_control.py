@@ -137,7 +137,10 @@ class LiveControl:
                 **self.state.get("egress", {}),
                 "enabled": os.getenv("LIVE_IP_GUARD") == "true",
             },
-            "execution": "MANUAL_PER_ORDER",
+            "execution": "AUTOMATIC"
+            if self.state.get("auto", {}).get("armed")
+            else "MANUAL_PER_ORDER",
+            "automatic": self.state.get("auto", {}),
             "credentials_configured": self.adapter is not None,
             "execution_enabled": os.getenv("ENABLE_LIVE_TRADING") == "true",
             "stop_active": self.switch.active,
@@ -244,7 +247,9 @@ class LiveControl:
         if len(times) >= 4 or time.time() - self.state["last_trade"] < 1800:
             raise ValueError("RATE_OR_COOLDOWN_LIMIT")
 
-    def prepare(self, side: str, amount: str) -> dict[str, Any]:
+    def prepare(self, side: str, amount: str, *, automatic: bool = False) -> dict[str, Any]:
+        if self.state.get("auto", {}).get("armed") and not automatic:
+            raise ValueError("AUTOMATIC_MODE_ACTIVE")
         self.check_release()
         value = D(amount)
         if not value.is_finite() or not 0 < value <= LIVE_POLICY.order_limit:
@@ -287,6 +292,19 @@ class LiveControl:
             or reviewed is not True
         ):
             raise ValueError("EXPLICIT_ORDER_CONFIRMATION_REQUIRED")
+        if self.state.get("auto", {}).get("armed"):
+            raise ValueError("AUTOMATIC_MODE_ACTIVE")
+        return self.submit(proposal, automatic=False)
+
+    def submit(self, proposal: dict[str, Any], *, automatic: bool) -> dict[str, Any]:
+        """Shared final checks; caller must hold control.lock for the entire cycle."""
+        if automatic:
+            from trader.live_auto import require_armed
+
+            require_armed(self)
+        proposal_id = proposal["id"]
+        if self.state.get("proposal") != proposal:
+            raise ValueError("PROPOSAL_NOT_ACTIVE")
         self.check_release()
         if os.getenv("ENABLE_LIVE_TRADING") != "true":
             raise ValueError("LIVE_EXECUTION_DISABLED")
@@ -313,7 +331,11 @@ class LiveControl:
         if self.switch.active:
             raise ValueError("PERSISTENT_STOP")
         self.state.update(pending=proposal_id, proposal=None, status="PENDING")
-        self.save("HUMAN_APPROVED", proposal=proposal, performance_reviewed=True)
+        self.save(
+            "AUTO_APPROVED" if automatic else "HUMAN_APPROVED",
+            proposal=proposal,
+            performance_reviewed=not automatic,
+        )
         self.transport.grant = {
             "symbol": "BTCUSDT",
             "side": proposal["side"],
